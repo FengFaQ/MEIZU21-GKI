@@ -94,6 +94,8 @@
 | 7 | 刷两个槽 → 变砖 | 没有可启动槽 | **只刷非活动槽** |
 | 8 | 解 vendor_boot 的 21 Pro 模块 | ramdisk 载荷被混淆 | 别试；21 的能解（lz4） |
 | 9 | 用 PowerShell 改 UTF-8 中文文件 → 文件损坏 | Windows PowerShell 编码陷阱 | 一律用 `write`/`edit` 工具或 WSL python 改文本 |
+| 10 | `fs/stat.c:217: error: call to undeclared function 'susfs_is_data_local_tmp_dir'` | 用了 `susfs4ksu/kernel_patches/` 的旧版 SUSFS 文件，而 01 补丁是按参考树作者改过的版本写的 | 从参考树工作副本取 `common/fs/susfs.c`、`common/include/linux/susfs.h`、`susfs_def.h` |
+| 11 | CI 里 `TRIM_UNUSED_KSYMS 必须关闭` 断言误报 | grep 模式写的是 `^CONFIG_... is not set`，实际行是 `# CONFIG_... is not set` | 模式必须带 `# ` |
 
 ## 6. 明确放弃 / 不做（本轮）
 

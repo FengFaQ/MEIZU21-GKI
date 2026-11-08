@@ -85,3 +85,23 @@ $id=($ws.workflows | Where-Object {$_.path -like '*meizu21.yml'}).id
 Invoke-RestMethod "https://api.github.com/repos/FengFaQ/MEIZU21-GKI/actions/workflows/$id/dispatches" `
   -Method Post -Headers ($h+@{'Content-Type'='application/json'}) -Body (@{ref='main'}|ConvertTo-Json)
 ```
+
+---
+
+## 6. CI 运行记录（最新在最后）
+
+| run | 结果 | 卡点 | 修法 |
+|---|---|---|---|
+| #1 | ❌ | 步 8「TRIM 断言」——`grep '^CONFIG_TRIM_UNUSED_KSYMS is not set'` 少了 `# ` 前缀 | 补 `# ` |
+| #2 | ❌ | 同上（修脚本的 commit 已含 gate 新脚本，但断言 bug 未修） | 同 #1 |
+| #3 | ⏳ | 用参考树改过的 SUSFS 三文件 + 修好的断言 | 观察中 |
+
+> run#1 已证明：clang-r487747c 下载、GKI 源码拉取、01 补丁应用、FinaSU 集成、olddefconfig 全部 OK；
+> 最终 `.config` 里 `CONFIG_KSU=y / KSU_SUSFS=y / KSU_HOOK_SUSFS_INLINE=y / KSU_DYNAMIC_MANAGER=y` 全部正确。
+
+### 已知坑（本轮新增）
+
+1. **SUSFS 三文件必须用参考树工作副本版**（`common/fs/susfs.c`、`common/include/linux/susfs*.h`），
+   不能用 `susfs4ksu/kernel_patches/` 里的旧版：作者改过（加了 `susfs_is_data_local_tmp_dir()`），
+   旧版会在 `fs/stat.c:217` 报 undeclared。
+2. 断言里 grep `.config` 的 `is not set` 行必须带 `# ` 前缀。

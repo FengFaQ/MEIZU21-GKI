@@ -88,13 +88,14 @@ NA_TOKENS = ("-", "n/a", "na", "none", "?", "null")
 # expression (the encoding width varies between llvm versions), strip the prefix
 # in two steps and then match the mnemonic at the start of what remains.
 ADDR_PREFIX_RE = re.compile(r"^\s*[0-9a-fA-F]+:\s*")
-RAWBYTES_RE = re.compile(r"^(?:[0-9a-fA-F]{2}\s+)+")
+RAWBYTES_RE = re.compile(r"^[0-9a-fA-F]{8}\s+")
 INSN_RE = re.compile(
-    r"^(?P<op>mov[zk])\s+w17\s*,\s*#(?P<imm>0x[0-9a-fA-F]+|\d+)"
+    r"^(?:[0-9a-fA-F]{8}\s+)?"                       # optional objdump raw encoding
+    r"(?P<op>mov[zk])\s+w17\s*,\s*#(?P<imm>0x[0-9a-fA-F]+|\d+)"
     r"(?:\s*,\s*lsl\s*#(?P<lsl>\d+))?",
     re.IGNORECASE,
 )
-BRK_RE = re.compile(r"^brk\s+#", re.IGNORECASE)
+BRK_RE = re.compile(r"^(?:[0-9a-fA-F]{8}\s+)?brk\s+#", re.IGNORECASE)
 
 
 def normalise_asm_line(line):
