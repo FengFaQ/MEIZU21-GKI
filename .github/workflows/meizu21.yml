@@ -232,14 +232,31 @@ jobs:
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig && echo "OK KSU Kconfig 已挂"
 
       - name: 7. 获取并集成 FinaSU（每次构建实时拉取，故意不进缓存）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           WANT="${FINASU_INPUT:-latest}"
+          resolve_latest_finasu() {
+            local ref=""
+            # ① GET + 跟随重定向拿最终 URL（注意不能用 -I：HEAD 在 GitHub 上不一定 302）
+            ref="$(curl -sSL --retry 3 --retry-delay 5 -o /dev/null -w '%{url_effective}' \
+              "https://github.com/${FINASU_REPO}/releases/latest" 2>/dev/null \
+              | sed -nE 's#.*/tag/([^/]+).*#\1#p' || true)"
+            if [ -n "$ref" ]; then echo "$ref"; return; fi
+            # ② 退回 GitHub API（run#6 实测可用；若撞匿名限流会失败，那就继续往下）
+            ref="$(curl -sSL --retry 3 ${GH_TOKEN:+-H "Authorization: Bearer ${GH_TOKEN}"} \
+              "https://api.github.com/repos/${FINASU_REPO}/releases/latest" 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null || true)"
+            if [ -n "$ref" ]; then echo "$ref"; return; fi
+            # ③ 扫描 expanded_assets 页面里的 tag（最后兜底）
+            ref="$(curl -sSL --retry 3 "https://github.com/${FINASU_REPO}/releases/latest" 2>/dev/null \
+              | grep -oE '/releases/tag/[^"]+' | head -1 | sed 's#.*/tag/##' || true)"
+            echo "$ref"
+          }
           if [ "$WANT" = "latest" ]; then
-            echo "[finasu] 解析最新 release（用 releases/latest 的重定向，避开 API 限流）…"
-            FINASU_REF="$(curl -sSIL -o /dev/null -w '%{url_effective}' \
-              "https://github.com/${FINASU_REPO}/releases/latest" \
-              | sed -nE 's#.*/tag/([^/]+).*#\1#p')"
+            echo "[finasu] 解析最新 release（GET 重定向 → API → 页面扫描 三级兜底）…"
+            FINASU_REF="$(resolve_latest_finasu)"
           else
             FINASU_REF="$WANT"
           fi
@@ -300,6 +317,8 @@ jobs:
           echo "配置 OK"
 
       - name: 9. 下载管理器 APK 并动态提取证书（与本次 FinaSU 版本严格对应）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           # 双通道下载：① GitHub API 的 release asset（application/octet-stream）
@@ -307,6 +326,7 @@ jobs:
           # 每次都要做体积断言（APK > 1 MB）——run#9 曾把 92 字节的错误页当成 APK 下载，
           # 结果证书解析失败、整轮构建白跑。
           API_JSON="$(curl -sSL --retry 3 --retry-delay 5 \
+            ${GH_TOKEN:+-H "Authorization: Bearer ${GH_TOKEN}"} \
             "https://api.github.com/repos/${FINASU_REPO}/releases/tags/${FINASU_REF}" || true)"
           APK_INFO="$(printf '%s' "$API_JSON" | python3 -c '
           import json, sys
