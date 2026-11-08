@@ -209,9 +209,10 @@ jobs:
           set -euo pipefail
           WANT="${FINASU_INPUT:-latest}"
           if [ "$WANT" = "latest" ]; then
-            echo "[finasu] 解析最新 release…"
-            FINASU_REF="$(curl -sSL --retry 3 "https://api.github.com/repos/${FINASU_REPO}/releases/latest" \
-              | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
+            echo "[finasu] 解析最新 release（用 releases/latest 的重定向，避开 API 限流）…"
+            FINASU_REF="$(curl -sSIL -o /dev/null -w '%{url_effective}' \
+              "https://github.com/${FINASU_REPO}/releases/latest" \
+              | sed -nE 's#.*/tag/([^/]+).*#\1#p')"
           else
             FINASU_REF="$WANT"
           fi
@@ -274,10 +275,12 @@ jobs:
       - name: 9. 下载管理器 APK 并动态提取证书（与本次 FinaSU 版本严格对应）
         run: |
           set -euo pipefail
-          REL_JSON="$(curl -sSL --retry 3 "https://api.github.com/repos/${FINASU_REPO}/releases/tags/${FINASU_REF}")"
-          APK_URL="$(printf '%s' "$REL_JSON" | python3 -c \
-            'import json,sys; d=json.load(sys.stdin); print(next(a["browser_download_url"] for a in d["assets"] if a["name"].endswith("-release.apk")))')"
-          test -n "$APK_URL" || { echo "release 里找不到 -release.apk"; exit 1; }
+          # 用 releases/expanded_assets 的 HTML 片段拿资产直链（不需要 API token / 不受匿名限流影响）
+          APK_PATH="$(curl -sSL --retry 3 \
+            "https://github.com/${FINASU_REPO}/releases/expanded_assets/${FINASU_REF}" \
+            | grep -oE 'href=\"/[^\"]*-release\.apk\"' | head -1 | sed -e 's/^href="//' -e 's/"$//')"
+          test -n "$APK_PATH" || { echo "release 页面里找不到 -release.apk"; exit 1; }
+          APK_URL="https://github.com${APK_PATH}"
           APK_NAME="$(basename "$APK_URL")"
           echo "APK: $APK_NAME"
           echo "URL: $APK_URL"
@@ -312,7 +315,10 @@ jobs:
           cd common
           rm -f .version
           export PATH="$CLANG_BIN:$PATH"
+          # KCFLAGS=-fno-temp-file：规避 clang 在高并发下偶发 "unable to rename temporary *.o.tmp"
+          # （tree-analyst 本地实测：加上后产物逐字节一致，只影响临时文件策略）
           make -j"$MAKE_JOBS" ARCH=arm64 LLVM=1 LLVM_IAS=1 Image \
+            KCFLAGS=-fno-temp-file \
             KSU_REQUIRE_PREINIT=1 \
             KSU_EXPECTED_SIZE="$KSU_EXPECTED_SIZE" \
             KSU_EXPECTED_HASH="$KSU_EXPECTED_HASH" 2>&1 | tee ../build_kernel.log
