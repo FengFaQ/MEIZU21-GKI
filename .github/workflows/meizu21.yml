@@ -50,7 +50,9 @@ permissions:
 
 concurrency:
   group: meizu21-gki
-  cancel-in-progress: false
+  # 注意：跑长编译时一般要求 false；这里临时设 true 是为了让新 run 取消卡住的旧 run。
+  # 等流水线稳定后可以改回 false。
+  cancel-in-progress: true
 
 env:
   # ---- 全部 pin 死，保证可复现 ----
@@ -119,7 +121,7 @@ jobs:
           if [ "${{ steps.src-cache.outputs.cache-hit }}" = "true" ] && [ -x "$(find "$RUNNER_TEMP/toolchain" -type f -name clang -path '*/bin/*' 2>/dev/null | head -1)" ]; then
             restored=1
             echo "[cache] clang 来自 Actions 缓存（快路径）"
-          elif bash scripts/restore_cache.sh clang "$RUNNER_TEMP/toolchain"; then
+          elif timeout 300 bash scripts/restore_cache.sh clang "$RUNNER_TEMP/toolchain"; then
             restored=1
             echo "[cache] clang 来自仓库 cache 分支"
           else
@@ -172,7 +174,7 @@ jobs:
           if [ "${{ steps.src-cache.outputs.cache-hit }}" = "true" ] && [ -f common/Makefile ]; then
             restored=1
             echo "[cache] GKI 源码来自 Actions 缓存（快路径）"
-          elif bash scripts/restore_cache.sh gki common; then
+          elif timeout 300 bash scripts/restore_cache.sh gki common; then
             restored=1
             echo "[cache] GKI 源码来自仓库 cache 分支"
           else
