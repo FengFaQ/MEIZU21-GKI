@@ -200,7 +200,7 @@ jobs:
           need CONFIG_LTO_NONE
           need CONFIG_CFI_CLANG
           need CONFIG_IKCONFIG
-          grep -q '^CONFIG_TRIM_UNUSED_KSYMS is not set' .config || { echo "TRIM_UNUSED_KSYMS 必须关闭"; exit 1; }
+          grep -q '^# CONFIG_TRIM_UNUSED_KSYMS is not set' .config || { echo "TRIM_UNUSED_KSYMS 必须关闭"; exit 1; }
           if [ "$HOOK_BACKEND" = "inline" ]; then
             need CONFIG_KSU_HOOK_SUSFS_INLINE
             grep -q '^# CONFIG_KSU_HOOK_TRACEPOINT is not set' .config || { echo "inline 模式下 tracepoint 必须关闭"; exit 1; }
@@ -262,7 +262,10 @@ jobs:
             *) echo "FAIL 门禁 1/3：Image 里没有期望的 release 串"; exit 1 ;;
           esac
           KREL="$(cat include/config/kernel.release 2>/dev/null || true)"
-          echo "include/config/kernel.release=$KREL"
+          if [ -z "$KREL" ]; then
+            KREL="$(make -s ARCH=arm64 LLVM=1 kernelrelease 2>/dev/null || true)"
+          fi
+          echo "kernel.release=$KREL"
           test "$KREL" = "$EXP" || { echo "FAIL: kernel.release 与期望不符"; exit 1; }
           {
             echo "release_expected=$EXP"

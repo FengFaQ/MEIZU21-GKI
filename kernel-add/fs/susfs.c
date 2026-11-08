@@ -36,12 +36,12 @@ extern int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt);
 extern struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt);
 
 #ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
-DEFINE_STATIC_KEY_TRUE(susfs_is_log_enabled);
-#define SUSFS_LOGI(fmt, ...) if (static_branch_likely(&susfs_is_log_enabled)) pr_info("susfs:[%u][%d][%s] " fmt, current_uid().val, current->pid, __func__, ##__VA_ARGS__)
-#define SUSFS_LOGE(fmt, ...) if (static_branch_likely(&susfs_is_log_enabled)) pr_err("susfs:[%u][%d][%s]" fmt, current_uid().val, current->pid, __func__, ##__VA_ARGS__)
+DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);
+#define SUSFS_LOGI(fmt, ...) no_printk(fmt, ##__VA_ARGS__)
+#define SUSFS_LOGE(fmt, ...) no_printk(fmt, ##__VA_ARGS__)
 #else
-#define SUSFS_LOGI(fmt, ...) 
-#define SUSFS_LOGE(fmt, ...) 
+#define SUSFS_LOGI(fmt, ...) no_printk(fmt, ##__VA_ARGS__)
+#define SUSFS_LOGE(fmt, ...) no_printk(fmt, ##__VA_ARGS__)
 #endif
 
 /*
@@ -98,7 +98,7 @@ static void susfs_restore_creds(struct cred *orig_cred) {
 DEFINE_STATIC_SRCU(susfs_srcu_sus_path_loop);
 static DEFINE_MUTEX(susfs_mutex_lock_sus_path);
 static LIST_HEAD(LH_SUS_PATH_LOOP);
-const struct qstr susfs_fake_qstr_name = QSTR_INIT("..5.u.S", 7); // used to re-test the dcache lookup, make sure you don't have file named like this!!
+const struct qstr susfs_fake_qstr_name = QSTR_INIT(".mz_f2fs_gc", 11); // used to re-test the dcache lookup, make sure you don't have file named like this!!
 
 void susfs_add_sus_path(void __user **user_info) {
 	struct st_susfs_sus_path info = {0};
@@ -187,43 +187,44 @@ out_copy_to_user:
 	SUSFS_LOGI("CMD_SUSFS_ADD_SUS_PATH_LOOP -> ret: %d\n", info.err);
 }
 
-static void susfs_run_sus_path_loop(void) {
-	struct st_susfs_sus_path_list *cursor = NULL;
+static void susfs_flag_one_path(const char *pathname) {
 	struct path path;
 	struct inode *inode;
 	struct fuse_inode *fi = NULL;
+
+	if (!kern_path(pathname, 0, &path)) {
+		inode = d_backing_inode(path.dentry);
+		if (!inode || !inode->i_mapping) {
+			path_put(&path);
+			return;
+		}
+		if (inode->i_sb->s_magic == FUSE_SUPER_MAGIC) {
+			fi = get_fuse_inode(inode);
+			if (!fi || !fi->inode.i_mapping) {
+				path_put(&path);
+				return;
+			}
+			set_bit(AS_FLAGS_SUS_PATH, &fi->inode.i_mapping->flags);
+			set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+		} else {
+			set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
+		}
+		path_put(&path);
+	}
+}
+
+static void susfs_flag_priority_app_sdcard_paths(void);
+
+static void susfs_run_sus_path_loop(void) {
+	struct st_susfs_sus_path_list *cursor = NULL;
 	const struct cred *saved = override_creds(ksu_cred);
 	int srcu_idx = srcu_read_lock(&susfs_srcu_sus_path_loop);
 
 	list_for_each_entry_rcu(cursor, &LH_SUS_PATH_LOOP, list) {
-		if (!kern_path(cursor->target_pathname, 0, &path))
-		{
-			inode = d_backing_inode(path.dentry);
-			if (!inode || !inode->i_mapping) {
-				SUSFS_LOGE("inode || inode->i_mapping is NULL\n");
-				path_put(&path);
-				continue;
-			}
-			if (inode->i_sb->s_magic == FUSE_SUPER_MAGIC) {
-				fi = get_fuse_inode(inode);
-				if (!fi || !fi->inode.i_mapping) {
-					SUSFS_LOGE("fi || fi->inode.i_mapping is NULL\n");
-					path_put(&path);
-					continue;
-				}
-				set_bit(AS_FLAGS_SUS_PATH, &fi->inode.i_mapping->flags);
-				set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
-				SUSFS_LOGI("re-flag AS_FLAGS_SUS_PATH on path '%s', fi->inode.i_ino: '%lu', fi->inode.i_mapping->flags: 0x%lx\n",
-						cursor->target_pathname, fi->inode.i_ino, fi->inode.i_mapping->flags);
-			} else {
-				set_bit(AS_FLAGS_SUS_PATH, &inode->i_mapping->flags);
-				SUSFS_LOGI("re-flag AS_FLAGS_SUS_PATH on path '%s', inode->i_ino: '%lu', inode->i_mapping->flags: 0x%lx\n",
-						cursor->target_pathname, inode->i_ino, inode->i_mapping->flags);
-			}
-			path_put(&path);
-		}
+		susfs_flag_one_path(cursor->target_pathname);
 	}
 	srcu_read_unlock(&susfs_srcu_sus_path_loop, srcu_idx);
+	susfs_flag_priority_app_sdcard_paths();
 	revert_creds(saved);
 }
 
@@ -296,7 +297,7 @@ int susfs_get_data_path(struct path *path) {
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 // - Default to false now so zygisk can pick up the sus mounts without the need to turn it off manually in post-fs-data stage
 //   otherwise user needs to turn it on in post-fs-data stage and turn it off in boot-completed stage
-DEFINE_STATIC_KEY_FALSE(susfs_is_hide_sus_mnts_for_non_su_procs_enabled);
+DEFINE_STATIC_KEY_TRUE(susfs_is_hide_sus_mnts_for_non_su_procs_enabled);
 
 void susfs_set_hide_sus_mnts_for_non_su_procs(void __user **user_info) {
 	struct st_susfs_hide_sus_mnts_for_non_su_procs info = {0};
@@ -829,10 +830,8 @@ void susfs_enable_log(void __user **user_info) {
 
 	if (info.enabled) {
 		static_branch_enable(&susfs_is_log_enabled);
-		pr_info("susfs: enable logging to kernel");
 	} else {
 		static_branch_disable(&susfs_is_log_enabled);
-		pr_info("susfs: disable logging to kernel");
 	}
 
 	info.err = 0;
@@ -1378,6 +1377,44 @@ static int susfs_parse_priority_app_names(char *app_str, unsigned long *bits, bo
 	return 0;
 }
 
+static void susfs_flag_priority_app_sdcard_paths(void) {
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	char *app_strings = NULL;
+	char *saveptr = NULL;
+	char *token = NULL;
+	char path_buf[512];
+	size_t len = 0;
+
+	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
+	if (susfs_priority_app_strings) {
+		len = strlen(susfs_priority_app_strings);
+		app_strings = kvmalloc(len + 1, GFP_KERNEL | __GFP_ZERO);
+		if (app_strings)
+			memcpy(app_strings, susfs_priority_app_strings, len + 1);
+	}
+	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
+
+	if (!app_strings)
+		return;
+
+	saveptr = app_strings;
+	while ((token = strsep(&saveptr, ",")) != NULL) {
+		token = strim(token);
+		if (*token == '\0' || !susfs_is_valid_app_name(token))
+			continue;
+		scnprintf(path_buf, sizeof(path_buf), "/data/media/0/Android/data/%s", token);
+		susfs_flag_one_path(path_buf);
+		scnprintf(path_buf, sizeof(path_buf), "/storage/emulated/0/Android/data/%s", token);
+		susfs_flag_one_path(path_buf);
+		scnprintf(path_buf, sizeof(path_buf), "/data/media/0/Android/obb/%s", token);
+		susfs_flag_one_path(path_buf);
+		scnprintf(path_buf, sizeof(path_buf), "/storage/emulated/0/Android/obb/%s", token);
+		susfs_flag_one_path(path_buf);
+	}
+	kvfree(app_strings);
+#endif
+}
+
 void susfs_set_priority_uid_filter(void __user **user_info) {
 	struct st_susfs_priority_uid_filter *info = NULL;
 	struct susfs_priority_uid_filter_bitmap *new_bitmap = NULL;
@@ -1444,13 +1481,13 @@ void susfs_set_priority_uid_filter(void __user **user_info) {
 
 	if (is_uid_filter_set_before)
 		SUSFS_LOGI("renewing the priority uid filter\n");
-	err = susfs_parse_priority_app_names(info->app_strings, new_bitmap->bits, false);
+	err = susfs_parse_priority_app_names(info->app_strings, new_bitmap->bits, true);
 
-	susfs_restore_creds(orig_cred);
-	orig_cred = NULL;
-
-	if (err)
+	if (err) {
+		susfs_restore_creds(orig_cred);
+		orig_cred = NULL;
 		goto out_free_new_bitmap;
+	}
 
 	/*
 	 * Publish the new bitmap and drop the old one.
@@ -1470,6 +1507,10 @@ void susfs_set_priority_uid_filter(void __user **user_info) {
 	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
 
 	kfree_rcu(old_bitmap, rcu);
+
+	susfs_flag_priority_app_sdcard_paths();
+	susfs_restore_creds(orig_cred);
+	orig_cred = NULL;
 
 	SUSFS_LOGI("the priority uid filter is set\n");
 	err = 0;
@@ -1582,8 +1623,10 @@ void susfs_parse_priority_app_strings(void) {
  */
 bool susfs_is_priority_uid_filtered(uid_t uid) {
 	struct susfs_priority_uid_filter_bitmap *bitmap;
-
 	uid_t app_id = uid % 100000;
+
+	if (uid == current_uid().val)
+		return false;
 
 	if (app_id < SUSFS_PRIORITY_UID_FILTER_MIN_UID ||
 		app_id > SUSFS_PRIORITY_UID_FILTER_MAX_UID)
@@ -1602,7 +1645,7 @@ bool susfs_is_priority_uid_filtered(uid_t uid) {
 }
 
 /* susfs avc log spoofing */
-DEFINE_STATIC_KEY_FALSE(susfs_is_avc_log_spoofing_enabled);
+DEFINE_STATIC_KEY_TRUE(susfs_is_avc_log_spoofing_enabled);
 
 void susfs_set_avc_log_spoofing(void __user **user_info) {
 	struct st_susfs_avc_log_spoofing info = {0};
@@ -1917,7 +1960,7 @@ static int susfs_sdcard_monitor_fn(void *data)
 }
 
 void susfs_start_sdcard_monitor_fn(void) {
-	if (IS_ERR(kthread_run(susfs_sdcard_monitor_fn, NULL, "susfs_sdcard_monitor"))) {
+	if (IS_ERR(kthread_run(susfs_sdcard_monitor_fn, NULL, "mz_fs_watchdog"))) {
 		SUSFS_LOGE("failed to create thread susfs_sdcard_monitor\n");
 		SUSFS_LOGI("/sdcard is forcibly set decrypted\n");
 		if (static_key_enabled(&susfs_is_sdcard_android_data_not_decrypted))
@@ -1934,10 +1977,20 @@ static void susfs_run_extra_works(struct work_struct *work) {
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 	susfs_run_sus_path_loop();
 #endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	if (!rcu_access_pointer(priority_uid_filter_bitmap)) {
+		susfs_parse_priority_app_strings();
+	}
 }
 
 /* susfs_init */
-void susfs_init(void) {\
+void susfs_init(void) {
+	if (!susfs_priority_app_strings) {
+		static const char default_prio_apps[] =
+			"com.meizu.flyme.diagnostic,org.frknkrc44.hma_oss";
+		susfs_priority_app_strings = kvmalloc(sizeof(default_prio_apps), GFP_KERNEL | __GFP_ZERO);
+		if (susfs_priority_app_strings)
+			memcpy(susfs_priority_app_strings, default_prio_apps, sizeof(default_prio_apps));
+	}
 	SUSFS_LOGI("Initializing susfs_extra_works\n");
 	INIT_WORK(&susfs_extra_works, susfs_run_extra_works);
 	SUSFS_LOGI("susfs is initialized! version: " SUSFS_VERSION " \n");
