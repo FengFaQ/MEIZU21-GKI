@@ -295,8 +295,17 @@ def iter_descriptors(vb, hdr):
         off += 16 + nbf
 
 
-def _decode_hash_desc_at(vb, desc_off, layout, stock_img):
-    """Try one layout.  Returns a field map if the AVB hash rule validates."""
+def _decode_hash_desc_at(vb, desc_off, layout, stock_img,
+                         expect_image_size=None, expect_salt=None):
+    """Try one layout.
+
+    A layout counts as validated either by the AVB hash rule against the full
+    stock image, or (when only the *skeleton* is available) by matching the
+    descriptor's image_size / salt against known stock facts passed in via
+    --expect-image-size / --expect-salt.  The latter is still a strong check:
+    both fields are at fixed offsets of the descriptor, so a wrong layout or
+    wrong offsets will not reproduce them.
+    """
     name_len = u32be(vb, desc_off + layout["name_len"])
     salt_len = u32be(vb, desc_off + layout["salt_len"])
     digest_len = u32be(vb, desc_off + layout["digest_len"])
@@ -322,11 +331,23 @@ def _decode_hash_desc_at(vb, desc_off, layout, stock_img):
     digest = bytes(vb[dig_off:dig_off + digest_len])
 
     # The discriminating test: the AVB hash rule only holds for the right triple.
+    validated_by = ""
     if digest_len == 32 and 0 < image_size <= len(stock_img):
         calc = hashlib.sha256(salt + stock_img[0:image_size]).digest()
-        validated = calc == digest
+        if calc == digest:
+            validated = True
+            validated_by = "avb-hash-rule"
+        else:
+            validated = False
     else:
         validated = False
+
+    # Skeleton fallback: the payload of a skeleton is zeroed, so the AVB rule can
+    # never hold; validate the *field offsets* against known stock facts instead.
+    if not validated and expect_image_size is not None and expect_salt is not None:
+        if image_size == int(expect_image_size) and salt.hex() == expect_salt.lower():
+            validated = True
+            validated_by = "known-stock-facts"
 
     hash_algo = ""
     if layout["name"] == "legacy-string32":
@@ -348,10 +369,12 @@ def _decode_hash_desc_at(vb, desc_off, layout, stock_img):
         "digest_off": dig_off,
         "digest_len": digest_len,
         "validated": validated,
+        "validated_by": validated_by,
     }
 
 
-def find_hash_descriptor(vb, hdr, stock_img, want_partition):
+def find_hash_descriptor(vb, hdr, stock_img, want_partition,
+                         expect_image_size=None, expect_salt=None):
     """Locate the AvbHashDescriptor for ``want_partition``.
 
     Layout selection is driven by validation against the stock image.  If no
@@ -365,7 +388,8 @@ def find_hash_descriptor(vb, hdr, stock_img, want_partition):
             continue
         for layout in LAYOUTS:
             try:
-                info = _decode_hash_desc_at(vb, desc_off, layout, stock_img)
+                info = _decode_hash_desc_at(vb, desc_off, layout, stock_img,
+                                            expect_image_size, expect_salt)
             except (struct.error, IndexError):
                 continue
             if info is None:
@@ -413,6 +437,13 @@ def parse_args(argv):
     ap.add_argument("--partition", default="boot",
                     help="expected partition name in the hash descriptor (default: boot)")
     ap.add_argument("--quiet", action="store_true", help="suppress the banner")
+    ap.add_argument(
+        "--expect-image-size", default=None,
+        help="known stock descriptor image_size (decimal or 0x..); lets --update-digest "
+             "validate field offsets when the template is a zeroed AVB skeleton")
+    ap.add_argument(
+        "--expect-salt", default=None,
+        help="known stock descriptor salt (hex); paired with --expect-image-size")
     return ap.parse_args(argv)
 
 
@@ -507,7 +538,11 @@ def main(argv=None):
     changes = []
 
     if a.update_digest:
-        desc_info = find_hash_descriptor(bytes(vbmeta), vbhdr, stock, a.partition.encode())
+        desc_info = find_hash_descriptor(
+            bytes(vbmeta), vbhdr, stock, a.partition.encode(),
+            expect_image_size=(int(a.expect_image_size, 0) if a.expect_image_size else None),
+            expect_salt=a.expect_salt,
+        )
         if desc_info is None:
             raise RepackError(
                 "no AvbHashDescriptor found in AVB0 - cannot --update-digest.\n"
@@ -758,6 +793,7 @@ def main(argv=None):
         if desc_info:
             lines += [
                 "hash_desc_layout=%s" % desc_info["layout"],
+                "hash_desc_validated_by=%s" % desc_info.get("validated_by", ""),
                 "hash_desc_offset=0x%X" % desc_info["desc_off"],
                 "hash_desc_len=%d" % desc_info["desc_len"],
                 "hash_desc_partition=%s" % desc_info["partition_name"].decode("ascii", "replace"),

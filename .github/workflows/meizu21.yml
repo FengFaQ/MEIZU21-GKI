@@ -12,11 +12,11 @@ on:
         type: choice
         options: [inline, tracepoint]
       strict_kcfi:
-        description: '门禁 3（kCFI）是否硬失败'
+        description: '门禁 3（kCFI）是否硬失败（run#6 实测 21 MATCH+3 N/A，默认硬）'
         required: true
-        default: 'false'
+        default: 'true'
         type: choice
-        options: ['false', 'true']
+        options: ['true', 'false']
       publish:
         description: '是否发布 release + 更新 dist 分支'
         required: true
@@ -432,13 +432,22 @@ jobs:
           PY
           img_size="$(stat -c%s common/arch/arm64/boot/Image)"
           echo "Image size=$img_size"
+          # AVB 骨架的 payload 被清零，AVB hash rule 无法校验；用「已知原厂事实」校验 descriptor 布局
+          EXP_SIZE="$(sed -n 's/^avb_vbmeta_offset=//p' "$DEVICE_DIR/source.txt")"
+          EXP_SALT="$(sed -n 's/^kernel_sha256=//p' "$DEVICE_DIR/source.txt")"
+          echo "hash descriptor expectations: image_size=$EXP_SIZE salt=$EXP_SALT"
+          test -n "$EXP_SIZE" -a -n "$EXP_SALT" || { echo "device facts 里缺 avb_vbmeta_offset/kernel_sha256"; exit 1; }
           test "$img_size" -lt 94371840 || { echo "Image 太大（>90 MiB），会超出 boot 分区 payload 安全区"; exit 1; }
           python3 scripts/repack_avb_boot.py common/arch/arm64/boot/Image /tmp/stock_boot_skeleton.img out/boot.img
           if [ "$EMIT_V2" = "true" ]; then
             python3 scripts/repack_avb_boot.py common/arch/arm64/boot/Image /tmp/stock_boot_skeleton.img \
-              out/boot-v2digest.img --update-digest
+              out/boot-v2digest.img --update-digest \
+              --expect-image-size "$EXP_SIZE" --expect-salt "$EXP_SALT"
           fi
           python3 scripts/audit_boot.py out/boot.img | tee out/boot_avb_report.txt
+          if [ -f out/boot-v2digest.img ]; then
+            python3 scripts/audit_boot.py out/boot-v2digest.img | tee out/boot_avb_report_v2.txt
+          fi
           ls -la out/
           (cd out && sha256sum * > sha256sums.txt && cat sha256sums.txt)
 

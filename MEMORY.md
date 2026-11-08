@@ -100,6 +100,9 @@
 | 13 | `ls: cannot access 'Module.symvers'` → 构建步骤 exit 2（但 Image 已生成） | 只编 `Image` 时 modpost 产物是 **`vmlinux.symvers`**；`Module.symvers` 只有编 modules 才有 | 门禁 2 / 产物统一用 `vmlinux.symvers` |
 | 14 | 自检 `grep susfs_is_current_ksu_domain include/linux/susfs_def.h` 永远失败 | 该符号不在头文件里；而且 `grep && echo` 在 `set -e` 下不会中断，属于「假自检」 | 改成检查真实存在的 `susfs_is_data_local_tmp_dir`，并改成 `|| { exit 1; }` 真断言 |
 | 15 | run#6 用仓库 cache 分支后，clang/GKI 两步反而更慢（229 s + 278 s，Google 直连是 214 s + 132 s） | `git fetch --depth 1` 拉 950 MB 分卷 + `git archive | tar` 解 1.5 GB 树的开销，比直接 HTTP 下载 + 解压更大 | 真正的快路径用 **Actions 缓存**（解压好的工具链+源码，key 绑 pin）；仓库 cache 分支只做持久/可移植兜底 |
+| 16 | cache 恢复日志 `cache 分支里没有 cache/clang`，实际回退 AOSP | prepare-cache 推分支时 `cp cache/. pkg/` 把 `cache/` 这层目录丢了，文件落在分支根 | 推送时 `cp cache/. pkg/cache/`；恢复脚本按 `cache/<key>/` 取 |
+| 17 | v2 重打包报「骨架无法用 AVB hash rule 校验 descriptor，拒绝写 digest」 | CI 模板是 payload 清零的 AVB **骨架**，salt+image 的 hash rule 永远不成立 | 新增 `--expect-image-size/--expect-salt`（来自 device facts），用已知原厂字段校验布局后再重算 |
+
 
 ## 6. 明确放弃 / 不做（本轮）
 

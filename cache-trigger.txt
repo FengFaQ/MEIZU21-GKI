@@ -10,4 +10,4 @@
 #   - 只改了补丁 / config / FinaSU 版本（FinaSU 每次构建实时拉最新，不进缓存）
 #
 # 最后刷新请求：2026-11-08T16:05:00+08:00 (initial)
-revision: 1
+revision: 2  # 2026-11-08 16:55 修正 cache 分支目录结构（补上 cache/ 这一层）

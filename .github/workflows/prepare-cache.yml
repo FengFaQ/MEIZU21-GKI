@@ -59,8 +59,9 @@ jobs:
         run: |
           set -euo pipefail
           PKG="$RUNNER_TEMP/cachepush"
-          rm -rf "$PKG"; mkdir -p "$PKG"
-          cp -a "$GITHUB_WORKSPACE/cache/." "$PKG/"
+          rm -rf "$PKG"; mkdir -p "$PKG/cache"
+          # 注意：必须保留 cache/ 这一层目录，恢复脚本按 cache/<key>/ 取
+          cp -a "$GITHUB_WORKSPACE/cache/." "$PKG/cache/"
           cd "$PKG"
           git init -q -b cache
           git config user.name "dsh-cache"

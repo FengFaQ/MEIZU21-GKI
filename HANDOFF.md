@@ -103,6 +103,28 @@ Invoke-RestMethod "https://api.github.com/repos/FengFaQ/MEIZU21-GKI/actions/work
 > run#3 其实证明了内核可编译：`OBJCOPY arch/arm64/boot/Image` 成功，且 Image 大小与本地预演完全一致（34,892,288 B）。
 > run#4 的 kCFI 门禁修复也已在参考 vmlinux 上复测通过（21 MATCH + 3 N/A）。
 
+
+## 6.1 run#6 结果（2026-11-08 16:45）——**内核编译 + 三门禁全绿，只差重打包 v2**
+
+| 步骤 | 结果 | 关键数据 |
+|---|---|---|
+| 11. 编译 Image | ✅ **成功** | Image 34,892,288 B；banner 与 21 原厂逐字符一致 |
+| 12. 门禁 1/3 release 串 | ✅ PASS | `6.1.25-android14-11-maybe-dirty`（banner + kernel.release 都对） |
+| 13. 门禁 2/3 KMI | ✅ PASS | Built 14,688 导出；**missing ∩ NEED = 0**；NEED CRC vs stock 0 mismatched |
+| 14. 门禁 3/3 kCFI | ✅ PASS | **21 MATCH + 3 N/A + 0 MISSING**（24/24 覆盖，含 12 个 OneMind traceiter） |
+| 15. 重打包 | ❌ v1 成功 / **v2 失败** | v1 `SELF-CHECK PASSED`（vbmeta 与原厂逐字节相同）；v2 报「骨架无法用 AVB hash rule 校验 descriptor，拒绝写 digest」 |
+
+**v2 失败根因**：CI 用 96 MiB 的 AVB *骨架*（payload 全 0）做模板，脚本原有的「用 AVB hash rule
+反算 descriptor 布局」在骨架上必然失败。修法：新增 `--expect-image-size` / `--expect-salt`
+（值来自 `device/meizu21/source.txt` 的 `avb_vbmeta_offset` 与 `kernel_sha256`），用已知原厂事实校验
+descriptor 的 image_size/salt 两个字段（偏移固定，布局错了就对不上），通过后才重算 digest。
+已在本机用骨架 + 原厂 kernel 验证：v2 输出与原厂 boot.img **sha256 完全相同**；换成 34,892,288 B 的
+Image 后 image_size/salt/digest 三处更新正确，`audit_boot.py` 判 digest 自洽。
+
+**run#6 缓存未命中**：`cache` 分支推送时把 `cache/` 这一层目录丢了（文件直接落在分支根目录），
+恢复脚本按 `cache/<key>/` 取 → 没找到，回退 AOSP。已修（prepare-cache 推送时补回 `cache/` 层级），
+`cache-trigger.txt` revision 2 会触发重建。
+
 ## 7. 编译缓存（2026-11-08 新增，三层）
 
 1. **Actions 缓存（快路径，首选）**：`actions/cache/restore@v4` 恢复 `$RUNNER_TEMP/toolchain` + `common`（约 2.7 GB），
