@@ -1,0 +1,9 @@
+# 编译缓存（由 .github/workflows/prepare-cache.yml 自动生成，勿手改）
+generated_at=2026-11-08T08:52:24Z
+generator=FengFaQ/MEIZU21-GKI@3d16909547d71aca3231d9019653f35aa7908744
+gki_sha=0d89215310919593150f0ef047f9fd9902e02bc7
+clang_id=clang-r487747c
+chunk_size=90000000
+# key|tarball|sha256|size|parts
+gki|gki-56dab447e078.tar.gz|56dab447e078480528c51ed18f6d61d0dd4c206b5901e0603e14ba64ecf013ef|226567104|3
+clang|clang-fac2c67be769.tar.gz|fac2c67be7690b686e1f2fae173fedfeb0dd74c6158c98798b0b46366d65a35e|721718586|9
