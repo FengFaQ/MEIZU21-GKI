@@ -99,6 +99,7 @@
 | 12 | `gzip: stdin: unexpected end of file` / `tar: Unexpected EOF` | Google 归档下载被截断（run#2 只下了 119 MB / 应 216 MB），且没校验完整性 | 重试 3 次 + `gzip -t` + 解压后文件数断言；优先走 cache 分支 |
 | 13 | `ls: cannot access 'Module.symvers'` → 构建步骤 exit 2（但 Image 已生成） | 只编 `Image` 时 modpost 产物是 **`vmlinux.symvers`**；`Module.symvers` 只有编 modules 才有 | 门禁 2 / 产物统一用 `vmlinux.symvers` |
 | 14 | 自检 `grep susfs_is_current_ksu_domain include/linux/susfs_def.h` 永远失败 | 该符号不在头文件里；而且 `grep && echo` 在 `set -e` 下不会中断，属于「假自检」 | 改成检查真实存在的 `susfs_is_data_local_tmp_dir`，并改成 `|| { exit 1; }` 真断言 |
+| 15 | run#6 用仓库 cache 分支后，clang/GKI 两步反而更慢（229 s + 278 s，Google 直连是 214 s + 132 s） | `git fetch --depth 1` 拉 950 MB 分卷 + `git archive | tar` 解 1.5 GB 树的开销，比直接 HTTP 下载 + 解压更大 | 真正的快路径用 **Actions 缓存**（解压好的工具链+源码，key 绑 pin）；仓库 cache 分支只做持久/可移植兜底 |
 
 ## 6. 明确放弃 / 不做（本轮）
 

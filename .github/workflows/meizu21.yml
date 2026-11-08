@@ -101,12 +101,25 @@ jobs:
           which pahole && pahole --version || echo "WARN: pahole 缺失（CONFIG_DEBUG_INFO_BTF=y 会炸）"
           which dtc || true
 
-      - name: 3. 准备 clang-r487747c（优先仓库 cache 分支，未命中再回退 AOSP）
+      - name: 2.5 恢复 Actions 缓存（快路径：工具链 + 上游源码）
+        id: src-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/toolchain
+            common
+          # 内容随 GKI pin / clang 版本变化；改结构时把 -v2 往上加
+          key: meizu21-upstream-${{ env.GKI_SHA }}-${{ env.CLANG_ID }}-v2
+
+      - name: 3. 准备 clang-r487747c（Actions 缓存 > 仓库 cache 分支 > AOSP）
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/toolchain"
           restored=0
-          if bash scripts/restore_cache.sh clang "$RUNNER_TEMP/toolchain"; then
+          if [ "${{ steps.src-cache.outputs.cache-hit }}" = "true" ] && [ -x "$(find "$RUNNER_TEMP/toolchain" -type f -name clang -path '*/bin/*' 2>/dev/null | head -1)" ]; then
+            restored=1
+            echo "[cache] clang 来自 Actions 缓存（快路径）"
+          elif bash scripts/restore_cache.sh clang "$RUNNER_TEMP/toolchain"; then
             restored=1
             echo "[cache] clang 来自仓库 cache 分支"
           else
@@ -152,11 +165,14 @@ jobs:
           echo "设备事实 OK: release=$RELEASE"
           wc -l "$D/stock_kernel.config" "$D/stock_Module.symvers" "$D/module_kmi_manifest.txt"
 
-      - name: 5. 准备 GKI 源码 @ pin SHA（优先仓库 cache 分支，未命中再回退 AOSP）
+      - name: 5. 准备 GKI 源码 @ pin SHA（Actions 缓存 > 仓库 cache 分支 > AOSP）
         run: |
           set -euo pipefail
           restored=0
-          if bash scripts/restore_cache.sh gki common; then
+          if [ "${{ steps.src-cache.outputs.cache-hit }}" = "true" ] && [ -f common/Makefile ]; then
+            restored=1
+            echo "[cache] GKI 源码来自 Actions 缓存（快路径）"
+          elif bash scripts/restore_cache.sh gki common; then
             restored=1
             echo "[cache] GKI 源码来自仓库 cache 分支"
           else
@@ -182,6 +198,15 @@ jobs:
           echo "上游版本: $V.$P.$S"
           test "$V.$P.$S" = "6.1.25" || { echo "上游版本不是 6.1.25"; exit 1; }
           ls common/fs/susfs.c 2>/dev/null && { echo "上游已有 fs/susfs.c？异常"; exit 1; } || true
+
+      - name: 5.5 保存 Actions 缓存（本次未命中时，给下一次构建提速）
+        if: steps.src-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/toolchain
+            common
+          key: meizu21-upstream-${{ env.GKI_SHA }}-${{ env.CLANG_ID }}-v2
 
       - name: 6. 打补丁 + 放入 SUSFS 内核实现
         run: |

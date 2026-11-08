@@ -36,17 +36,19 @@ AOSP kernel/common @ 0d8921531  (android14-6.1-2023-10_r17)
 
 ---
 
-## 编译加速：`cache` 分支（GKI 源码 + clang 工具链）
+## 编译加速：三层缓存（Actions 缓存 > 仓库 `cache` 分支 > Google 直连）
 
-每次构建都要从 Google 服务器下载两样大东西：AOSP 源码 tar.gz（约 216 MB）和 clang 工具链（约 720 MB）。
-`.github/workflows/prepare-cache.yml` 会把它们下载、校验、分卷（每个 ≤90 MB，绕开 git 单文件 100 MB 限制），
-推到本仓库的 **`cache` 分支**；`meizu21.yml` 构建时先 `scripts/restore_cache.sh` 恢复（逐卷 + 整包 sha256 校验），
-未命中才回退 Google 下载。**实测可省 8–10 分钟/次。**
+| 层 | 内容 | 实测/预期耗时 | 用途 |
+|---|---|---|---|
+| **① Actions 缓存** | 解压好的 clang 工具链 + 上游源码树（约 2.7 GB） | **~1 分钟**（快路径） | 每次构建首选；key 绑 GKI pin + clang 版本 |
+| **② 仓库 `cache` 分支** | GKI 源码 tar.gz（216 MB）+ clang tar.gz（720 MB），按 90 MB 分卷（git 单文件 100 MB 限制） | ~4–8 分钟（git fetch + git archive） | 冷启动 / fork / Actions 缓存被驱逐时的持久来源 |
+| ③ Google 直连 | googlesource `+archive` | ~5–6 分钟（且可能被截断） | 最后兜底 |
 
-- 缓存内容**只有**：GKI 源码、clang 工具链。
-- **FinaSU 不进缓存**：每次构建实时解析最新 release（源码 + APK + 证书都现取现用），所以 Root 永远是最新版；
-  如需复现旧版本，dispatch 时填 `finasu_ref: v1.5.0`。
-- 刷新缓存：改 `cache-trigger.txt` 并 push 到 `main`（该路径在 build workflow 的 `paths-ignore` 里，不会白跑一次编译）。
+- 工作流 `.github/workflows/prepare-cache.yml` 负责把 ①② 的原料下载、校验（GKI 6.1.25 / clang 17.0.2）、分卷后推到 **`cache` 分支**。
+- `meizu21.yml` 的 step 2.5/3/5/5.5 实现三层回退：Actions 缓存命中就直接用；否则仓库 cache 分支；再否则 Google 直连；首次填充 Actions 缓存。
+- 注意：**仓库 cache 分支本身不省时间**（实测 git fetch+archive 950 MB 比 Google 直连还慢，run#6：clang 229 s + GKI 278 s vs run#3：214 s + 132 s），它的价值是「持久、可移植、不怕 Google 抽风」；真正的提速来自 Actions 缓存。
+- **FinaSU 不进任何缓存**：每次构建实时解析最新 release（源码/APK/证书动态），dispatch 可用 `finasu_ref` 固定版本。
+- 刷新缓存：改 `cache-trigger.txt` 并 push（该路径在 build workflow 的 `paths-ignore` 里，不会白跑编译）。
 
 ## 刷入（只刷非活动槽）
 

@@ -103,10 +103,15 @@ Invoke-RestMethod "https://api.github.com/repos/FengFaQ/MEIZU21-GKI/actions/work
 > run#3 其实证明了内核可编译：`OBJCOPY arch/arm64/boot/Image` 成功，且 Image 大小与本地预演完全一致（34,892,288 B）。
 > run#4 的 kCFI 门禁修复也已在参考 vmlinux 上复测通过（21 MATCH + 3 N/A）。
 
-## 7. 编译缓存（2026-11-08 新增）
+## 7. 编译缓存（2026-11-08 新增，三层）
 
-- `.github/workflows/prepare-cache.yml`：下载 GKI 源码 + clang → 校验 → 分卷（90 MB）→ 推 `cache` 分支。
-- `scripts/prepare_cache.sh` / `scripts/restore_cache.sh`：生成 / 恢复缓存（恢复时逐卷 + 整包 sha256 校验）。
-- build workflow 的 step 3/5 已改成「先 cache、未命中回退 Google」。
-- **FinaSU 故意不缓存**：每次构建实时取最新 release（`finasu_ref: latest`），管理器证书也动态提取；
-  需要固定版本时 dispatch 填 `finasu_ref`。
+1. **Actions 缓存（快路径，首选）**：`actions/cache/restore@v4` 恢复 `$RUNNER_TEMP/toolchain` + `common`（约 2.7 GB），
+   key = `meizu21-upstream-<GKI_SHA>-<CLANG_ID>-v2`；未命中时构建结束前用 `actions/cache/save@v4` 回填。预期 **~1 分钟**。
+2. **仓库 `cache` 分支（持久层）**：`prepare-cache.yml` 下载 GKI(216 MB)+clang(720 MB) → 校验 → 90 MB 分卷 → 推 `cache` 分支；
+   `scripts/restore_cache.sh` 逐卷 + 整包 sha256 校验后解压。**实测比 Google 直连慢**（run#6 507 s vs run#3 346 s），
+   价值是持久/可移植/不怕下载被截断，不是省时间。
+3. **Google 直连（兜底）**：3 次重试 + `gzip -t` + 解压后文件数断言。
+
+- FinaSU 不缓存：每次构建实时取最新 release（`releases/latest` 重定向 + `expanded_assets` HTML，避开匿名 API 限流），
+  证书动态提取；dispatch 可填 `finasu_ref` 固定。
+- 刷新仓库缓存：改 `cache-trigger.txt` 并 push（build workflow 的 `paths-ignore` 已排除它）。
