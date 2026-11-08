@@ -302,16 +302,62 @@ jobs:
       - name: 9. 下载管理器 APK 并动态提取证书（与本次 FinaSU 版本严格对应）
         run: |
           set -euo pipefail
-          # 用 releases/expanded_assets 的 HTML 片段拿资产直链（不需要 API token / 不受匿名限流影响）
-          APK_PATH="$(curl -sSL --retry 3 \
-            "https://github.com/${FINASU_REPO}/releases/expanded_assets/${FINASU_REF}" \
-            | grep -oE 'href=\"/[^\"]*-release\.apk\"' | head -1 | sed -e 's/^href="//' -e 's/"$//')"
-          test -n "$APK_PATH" || { echo "release 页面里找不到 -release.apk"; exit 1; }
-          APK_URL="https://github.com${APK_PATH}"
-          APK_NAME="$(basename "$APK_URL")"
-          echo "APK: $APK_NAME"
-          echo "URL: $APK_URL"
-          curl -sSL --retry 5 --retry-delay 5 -o manager.apk "$APK_URL"
+          # 双通道下载：① GitHub API 的 release asset（application/octet-stream）
+          #             ② releases/download 页面直链
+          # 每次都要做体积断言（APK > 1 MB）——run#9 曾把 92 字节的错误页当成 APK 下载，
+          # 结果证书解析失败、整轮构建白跑。
+          API_JSON="$(curl -sSL --retry 3 --retry-delay 5 \
+            "https://api.github.com/repos/${FINASU_REPO}/releases/tags/${FINASU_REF}" || true)"
+          APK_INFO="$(printf '%s' "$API_JSON" | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+              a = [x for x in d.get("assets", []) if x["name"].endswith("-release.apk")][0]
+              print("%s %d" % (a["id"], a["size"]))
+          except Exception:
+              print("")
+          ')"
+          APK_ID="$(printf '%s' "$APK_INFO" | awk '{print $1}')"
+          APK_NAME="$(printf '%s' "$API_JSON" | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+              print([x for x in d.get("assets", []) if x["name"].endswith("-release.apk")][0]["name"])
+          except Exception:
+              print("")
+          ')"
+          if [ -z "$APK_NAME" ]; then
+            APK_NAME="$(curl -sSL --retry 3 \
+              "https://github.com/${FINASU_REPO}/releases/expanded_assets/${FINASU_REF}" \
+              | grep -oE '/[^"]*-release\.apk' | head -1 | sed 's#.*/##')" || true
+          fi
+          test -n "$APK_NAME" || { echo "release 里找不到 -release.apk"; exit 1; }
+          echo "APK: $APK_NAME (api asset id=$APK_ID)"
+
+          ok=0
+          if [ -n "$APK_ID" ]; then
+            for attempt in 1 2 3; do
+              echo "[download] APK 第 $attempt 次（API asset 通道）"
+              rm -f manager.apk
+              if curl -fSL --retry 3 --retry-delay 5 \
+                   -H "Accept: application/octet-stream" -o manager.apk \
+                   "https://api.github.com/repos/${FINASU_REPO}/releases/assets/${APK_ID}" \
+                 && [ "$(stat -c%s manager.apk)" -gt 1048576 ]; then ok=1; break; fi
+              echo "[download] API 通道失败/不完整，5s 后重试"; sleep 5
+            done
+          fi
+          if [ "$ok" = 0 ]; then
+            echo "[download] 回退到 releases/download 直链通道"
+            for attempt in 1 2 3; do
+              echo "[download] APK 第 $attempt 次（页面直链）"
+              rm -f manager.apk
+              if curl -fSL --retry 3 --retry-delay 5 -o manager.apk \
+                   "https://github.com/${FINASU_REPO}/releases/download/${FINASU_REF}/${APK_NAME}" \
+                 && [ "$(stat -c%s manager.apk)" -gt 1048576 ]; then ok=1; break; fi
+              echo "[download] 直链通道失败/不完整，5s 后重试"; sleep 5
+            done
+          fi
+          [ "$ok" = 1 ] || { echo "APK 下载 3+3 次均失败（体积不足 1 MB）"; exit 1; }
           SIZE="$(stat -c%s manager.apk)"
           SHA="$(sha256sum manager.apk | cut -d' ' -f1)"
           echo "APK size=$SIZE sha256=$SHA"
@@ -479,6 +525,8 @@ jobs:
             echo "kernel_image_sha256=$(sha256sum out/Image | cut -d' ' -f1)"
             echo "built_at=$(date -u +%FT%TZ)"
           } | tee out/MANAGER_INFO.txt
+          # 重新生成校验和，包含本步骤新加入的 Image / APK / config / symvers
+          (cd out && sha256sum * > sha256sums.txt && cat sha256sums.txt)
           ls -la out/
 
       - name: 17. 发布 release + 更新 dist 分支
