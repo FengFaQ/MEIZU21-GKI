@@ -88,20 +88,25 @@ Invoke-RestMethod "https://api.github.com/repos/FengFaQ/MEIZU21-GKI/actions/work
 
 ---
 
-## 6. CI 运行记录（最新在最后）
+---
 
-| run | 结果 | 卡点 | 修法 |
-|---|---|---|---|
-| #1 | ❌ | 步 8「TRIM 断言」——`grep '^CONFIG_TRIM_UNUSED_KSYMS is not set'` 少了 `# ` 前缀 | 补 `# ` |
-| #2 | ❌ | 同上（修脚本的 commit 已含 gate 新脚本，但断言 bug 未修） | 同 #1 |
-| #3 | ⏳ | 用参考树改过的 SUSFS 三文件 + 修好的断言 | 观察中 |
+## 6. CI 运行记录（逐轮日志分析，2026-11-08）
 
-> run#1 已证明：clang-r487747c 下载、GKI 源码拉取、01 补丁应用、FinaSU 集成、olddefconfig 全部 OK；
-> 最终 `.config` 里 `CONFIG_KSU=y / KSU_SUSFS=y / KSU_HOOK_SUSFS_INLINE=y / KSU_DYNAMIC_MANAGER=y` 全部正确。
+| run | commit | 失败步骤 | 日志里的真实原因 | 根因 / 修法 |
+|---|---|---|---|---|
+| #1 | 67e595b | 8. 生成 .config | `TRIM_UNUSED_KSYMS 必须关闭` → exit 1 | 我的断言写错：grep 期望 `^CONFIG_...`，实际行是 `# CONFIG_...`。已在 616d5c0 修 |
+| #2 | 6606a42 | 5. 下载 GKI 源码 | `gzip: stdin: unexpected end of file` / `tar: Unexpected EOF`；gki.tar.gz 只有 **119,586,816 B**（应为 226,533,513 B） | **下载被截断**且没有完整性校验。已加 3 次重试 + `gzip -t` + 解压后文件数断言 |
+| #3 | 616d5c0 | 11. 编译 Image | **内核编译本身成功**：Image 34,892,288 B、vmlinux 343,501,936 B；失败在 `ls ... Module.symvers: No such file`（exit 2） | 只编 `Image` 时 modpost 产出的是 **`vmlinux.symvers`**，`Module.symvers` 只有编 modules 才有。已改用 `vmlinux.symvers` |
+| #4 | 18bc717 | （同 #3） | 同上（该 commit 已修 kCFI 门禁解析，但 symvers 文件名未修） | 见上 |
+| #5 | 本轮 | — | — | 含 cache 分支、vmlinux.symvers 修复、FinaSU 实时最新、下载加固 |
 
-### 已知坑（本轮新增）
+> run#3 其实证明了内核可编译：`OBJCOPY arch/arm64/boot/Image` 成功，且 Image 大小与本地预演完全一致（34,892,288 B）。
+> run#4 的 kCFI 门禁修复也已在参考 vmlinux 上复测通过（21 MATCH + 3 N/A）。
 
-1. **SUSFS 三文件必须用参考树工作副本版**（`common/fs/susfs.c`、`common/include/linux/susfs*.h`），
-   不能用 `susfs4ksu/kernel_patches/` 里的旧版：作者改过（加了 `susfs_is_data_local_tmp_dir()`），
-   旧版会在 `fs/stat.c:217` 报 undeclared。
-2. 断言里 grep `.config` 的 `is not set` 行必须带 `# ` 前缀。
+## 7. 编译缓存（2026-11-08 新增）
+
+- `.github/workflows/prepare-cache.yml`：下载 GKI 源码 + clang → 校验 → 分卷（90 MB）→ 推 `cache` 分支。
+- `scripts/prepare_cache.sh` / `scripts/restore_cache.sh`：生成 / 恢复缓存（恢复时逐卷 + 整包 sha256 校验）。
+- build workflow 的 step 3/5 已改成「先 cache、未命中回退 Google」。
+- **FinaSU 故意不缓存**：每次构建实时取最新 release（`finasu_ref: latest`），管理器证书也动态提取；
+  需要固定版本时 dispatch 填 `finasu_ref`。

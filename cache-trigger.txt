@@ -1,0 +1,13 @@
+# 缓存刷新触发器
+#
+# 改这个文件并 push 到 main 会触发 `.github/workflows/prepare-cache.yml`：
+#   - 重新下载 / 校验 / 分卷 GKI 源码 + clang 工具链
+#   - 强制更新仓库的 `cache` 分支
+# 什么时候需要刷新：
+#   - 换了 GKI pin（GKI_SHA）或 clang 版本（CLANG_ID）
+#   - 怀疑 cache 分支内容损坏
+# 不需要刷新：
+#   - 只改了补丁 / config / FinaSU 版本（FinaSU 每次构建实时拉最新，不进缓存）
+#
+# 最后刷新请求：2026-11-08T16:05:00+08:00 (initial)
+revision: 1

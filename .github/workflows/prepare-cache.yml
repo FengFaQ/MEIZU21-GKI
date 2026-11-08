@@ -1,0 +1,81 @@
+name: 准备编译缓存（GKI 源码 + clang 工具链）
+
+# 这个 workflow 不编译内核，只做一件事：把「每次编译都要从 Google 服务器重新下载」的上游内容
+# （AOSP kernel/common 源码 tar.gz + clang-r487747c 工具链 tar.gz）下载、校验、分卷，
+# 推到本仓库的 `cache` 分支。之后 meizu21.yml 构建时会先从这里恢复，跳过 10+ 分钟下载。
+#
+# 触发方式（本 token 没有 Actions:write，无法用 API dispatch）：
+#   - 改本文件 / 改 cache-trigger.txt 后 push 到 main（推荐：只改 cache-trigger.txt）
+#   - 或在 GitHub 网页上手动 Run workflow
+# 注意：FinaSU 故意不缓存（每次构建实时拉最新 release）。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'cache-trigger.txt'
+      - '.github/workflows/prepare-cache.yml'
+      - 'scripts/prepare_cache.sh'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: meizu21-cache
+  cancel-in-progress: false
+
+env:
+  GKI_SHA: 0d89215310919593150f0ef047f9fd9902e02bc7
+  GKI_URL: https://android.googlesource.com/kernel/common/+archive/0d89215310919593150f0ef047f9fd9902e02bc7.tar.gz
+  CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-release/clang-r487747c.tar.gz
+  CLANG_ID: clang-r487747c
+
+jobs:
+  prepare:
+    name: 下载 + 校验 + 分卷 + 推 cache 分支
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: 0. 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 1. 清理磁盘 / 打印环境
+        run: |
+          echo "=== 清理前 ==="; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/boost /usr/share/swift 2>/dev/null || true
+          sudo apt-get clean
+          echo "=== 清理后 ==="; df -h / | tail -1
+
+      - name: 2. 下载 + 校验 + 分卷（生成 cache/ 目录树）
+        run: |
+          set -euo pipefail
+          bash scripts/prepare_cache.sh "$GITHUB_WORKSPACE/cache"
+
+      - name: 3. 推送到 `cache` 分支
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PKG="$RUNNER_TEMP/cachepush"
+          rm -rf "$PKG"; mkdir -p "$PKG"
+          cp -a "$GITHUB_WORKSPACE/cache/." "$PKG/"
+          cd "$PKG"
+          git init -q -b cache
+          git config user.name "dsh-cache"
+          git config user.email "dsh-cache@users.noreply.github.com"
+          git add -A
+          git commit -qm "cache: GKI@${GKI_SHA:0:12} + ${CLANG_ID} @ $(date -u +%FT%TZ)"
+          echo "=== 即将推送 ==="
+          git count-objects -vH
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" cache
+          echo "cache 分支已更新"
+
+      - name: 4. 打印 cache 摘要
+        if: always()
+        run: |
+          echo "=== cache/manifest.txt ==="
+          cat "$GITHUB_WORKSPACE/cache/manifest.txt" 2>/dev/null || true
+          echo "=== 分卷清单 ==="
+          find "$GITHUB_WORKSPACE/cache" -type f -printf '%10s  %p\n' 2>/dev/null | sort -k2 || true

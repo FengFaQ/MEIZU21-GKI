@@ -96,6 +96,9 @@
 | 9 | 用 PowerShell 改 UTF-8 中文文件 → 文件损坏 | Windows PowerShell 编码陷阱 | 一律用 `write`/`edit` 工具或 WSL python 改文本 |
 | 10 | `fs/stat.c:217: error: call to undeclared function 'susfs_is_data_local_tmp_dir'` | 用了 `susfs4ksu/kernel_patches/` 的旧版 SUSFS 文件，而 01 补丁是按参考树作者改过的版本写的 | 从参考树工作副本取 `common/fs/susfs.c`、`common/include/linux/susfs.h`、`susfs_def.h` |
 | 11 | CI 里 `TRIM_UNUSED_KSYMS 必须关闭` 断言误报 | grep 模式写的是 `^CONFIG_... is not set`，实际行是 `# CONFIG_... is not set` | 模式必须带 `# ` |
+| 12 | `gzip: stdin: unexpected end of file` / `tar: Unexpected EOF` | Google 归档下载被截断（run#2 只下了 119 MB / 应 216 MB），且没校验完整性 | 重试 3 次 + `gzip -t` + 解压后文件数断言；优先走 cache 分支 |
+| 13 | `ls: cannot access 'Module.symvers'` → 构建步骤 exit 2（但 Image 已生成） | 只编 `Image` 时 modpost 产物是 **`vmlinux.symvers`**；`Module.symvers` 只有编 modules 才有 | 门禁 2 / 产物统一用 `vmlinux.symvers` |
+| 14 | 自检 `grep susfs_is_current_ksu_domain include/linux/susfs_def.h` 永远失败 | 该符号不在头文件里；而且 `grep && echo` 在 `set -e` 下不会中断，属于「假自检」 | 改成检查真实存在的 `susfs_is_data_local_tmp_dir`，并改成 `|| { exit 1; }` 真断言 |
 
 ## 6. 明确放弃 / 不做（本轮）
 
@@ -114,3 +117,10 @@
 3. FinaSU Inline hook 在真机上的状态（管理器显示 Built-In / hook OK？）。
 4. `CONFIG_MZ_*`（原厂私有 Kconfig）被 olddefconfig 丢弃后，21 厂商模块行为是否异常。
 5. 自编内核与原厂的 `shrink_slab` / `mem_cgroup_id_*` kCFI 前导是否完全一致（门禁 3 会验）。
+
+## 8. 硬约束（用户 2026-11-08 明确要求）
+
+**禁止在本地（WSL/Windows）编译内核 Image。** 理由：WSL 实际可用磁盘只有 **100 GB**（`df` 显示的
+900+ GB 是虚拟磁盘，不是配额）。所有 GKI 编译与 boot.img 重打包**只能在 GitHub Actions** 做。
+本地只允许：静态分析、脚本单测、解包镜像、跑门禁脚本（不产生 vmlinux/Image）。
+历史上本地预演已产生 8.8 GB 构建产物，已全部清理（`/home/gki` 删除）。

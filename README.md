@@ -33,6 +33,21 @@ AOSP kernel/common @ 0d8921531  (android14-6.1-2023-10_r17)
 | boot AVB | 96 MiB，AVB0 在 payload 末尾、AVBf 在 EOF-64 | 魅族 ABL 即使 BL 解锁也会读这两块 |
 | 刷机 | **只刷非活动槽** | 刷坏还能 `fastboot --set-active=a` 退回 |
 
+
+---
+
+## 编译加速：`cache` 分支（GKI 源码 + clang 工具链）
+
+每次构建都要从 Google 服务器下载两样大东西：AOSP 源码 tar.gz（约 216 MB）和 clang 工具链（约 720 MB）。
+`.github/workflows/prepare-cache.yml` 会把它们下载、校验、分卷（每个 ≤90 MB，绕开 git 单文件 100 MB 限制），
+推到本仓库的 **`cache` 分支**；`meizu21.yml` 构建时先 `scripts/restore_cache.sh` 恢复（逐卷 + 整包 sha256 校验），
+未命中才回退 Google 下载。**实测可省 8–10 分钟/次。**
+
+- 缓存内容**只有**：GKI 源码、clang 工具链。
+- **FinaSU 不进缓存**：每次构建实时解析最新 release（源码 + APK + 证书都现取现用），所以 Root 永远是最新版；
+  如需复现旧版本，dispatch 时填 `finasu_ref: v1.5.0`。
+- 刷新缓存：改 `cache-trigger.txt` 并 push 到 `main`（该路径在 build workflow 的 `paths-ignore` 里，不会白跑一次编译）。
+
 ## 刷入（只刷非活动槽）
 
 ```bash
