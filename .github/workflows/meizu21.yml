@@ -29,6 +29,10 @@ on:
         default: 'true'
         type: choice
         options: ['true', 'false']
+  # 说明：本 token 没有 Actions:write，无法用 API dispatch；push 到 main 也会触发。
+  # push 触发时 inputs 为空，下面 job 级 env 用 `|| '默认值'` 兜底。
+  push:
+    branches: [main]
 
 permissions:
   contents: write
@@ -62,6 +66,11 @@ jobs:
     name: 编译 + 门禁 + 重打包
     runs-on: ubuntu-24.04
     timeout-minutes: 240
+    env:
+      HOOK_BACKEND: ${{ inputs.hook_backend || 'inline' }}
+      STRICT_KCFI: ${{ inputs.strict_kcfi || 'false' }}
+      PUBLISH: ${{ inputs.publish || 'true' }}
+      EMIT_V2: ${{ inputs.emit_v2_digest || 'true' }}
 
     steps:
       - name: 0. 检出仓库
@@ -169,7 +178,7 @@ jobs:
           scripts/config --disable TRIM_UNUSED_KSYMS
           scripts/config --enable KSU
           scripts/config --enable KSU_SUSFS
-          if [ "${{ inputs.hook_backend }}" = "inline" ]; then
+          if [ "$HOOK_BACKEND" = "inline" ]; then
             scripts/config --enable KSU_HOOK_SUSFS_INLINE
             scripts/config --disable KSU_HOOK_TRACEPOINT
           else
@@ -192,7 +201,7 @@ jobs:
           need CONFIG_CFI_CLANG
           need CONFIG_IKCONFIG
           grep -q '^CONFIG_TRIM_UNUSED_KSYMS is not set' .config || { echo "TRIM_UNUSED_KSYMS 必须关闭"; exit 1; }
-          if [ "${{ inputs.hook_backend }}" = "inline" ]; then
+          if [ "$HOOK_BACKEND" = "inline" ]; then
             need CONFIG_KSU_HOOK_SUSFS_INLINE
             grep -q '^# CONFIG_KSU_HOOK_TRACEPOINT is not set' .config || { echo "inline 模式下 tracepoint 必须关闭"; exit 1; }
           else
@@ -281,7 +290,7 @@ jobs:
           set -e
           echo "check_kcfi exit=$RC"
           if [ "$RC" -ne 0 ]; then
-            if [ "${{ inputs.strict_kcfi }}" = "true" ]; then
+            if [ "$STRICT_KCFI" = "true" ]; then
               echo "FAIL 门禁 3/3（strict_kcfi=true）"; exit 1
             fi
             echo "WARN 门禁 3/3 未全绿（strict_kcfi=false，继续；首刷后用 dmesg 回填期望值）"
@@ -316,7 +325,7 @@ jobs:
           echo "Image size=$img_size"
           test "$img_size" -lt 94371840 || { echo "Image 太大（>90 MiB），会超出 boot 分区 payload 安全区"; exit 1; }
           python3 scripts/repack_avb_boot.py common/arch/arm64/boot/Image /tmp/stock_boot_skeleton.img out/boot.img
-          if [ "${{ inputs.emit_v2_digest }}" = "true" ]; then
+          if [ "$EMIT_V2" = "true" ]; then
             python3 scripts/repack_avb_boot.py common/arch/arm64/boot/Image /tmp/stock_boot_skeleton.img \
               out/boot-v2digest.img --update-digest
           fi
@@ -340,7 +349,7 @@ jobs:
             echo "run=${{ github.run_number }}"
             echo "gki_sha=$GKI_SHA"
             echo "finasu_ref=$FINASU_REF ($FINASU_COMMIT)"
-            echo "hook_backend=${{ inputs.hook_backend }}"
+            echo "hook_backend=$HOOK_BACKEND"
             echo "manager_apk=FinaSU_v1.5.0_33174-release.apk"
             echo "manager_apk_sha256=$APK_SHA256"
             echo "ksu_expected_size=$KSU_EXPECTED_SIZE"
@@ -353,13 +362,13 @@ jobs:
           ls -la out/
 
       - name: 17. 发布 release + 更新 dist 分支
-        if: ${{ inputs.publish == 'true' && success() }}
+        if: env.PUBLISH == 'true' && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TAG="meizu21-${{ github.run_number }}"
-          TITLE="魅族 21 GKI · FinaSU · ${{ inputs.hook_backend }} · run#${{ github.run_number }}"
+          TITLE="魅族 21 GKI · FinaSU · ${HOOK_BACKEND} · run#${{ github.run_number }}"
           cat > /tmp/release_notes.md <<'EOF'
           设备：魅族 21（M2461 / Flyme 12.7）
           GKI：6.1.25-android14-11-maybe-dirty（android14-6.1-2023-10_r17）
@@ -394,7 +403,7 @@ jobs:
           git config user.name "dsh-ci"
           git config user.email "dsh-ci@users.noreply.github.com"
           git add -A
-          git commit -qm "dist: run ${{ github.run_number }} (${{ inputs.hook_backend }})"
+          git commit -qm "dist: run ${{ github.run_number }} ($HOOK_BACKEND)"
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" dist
           echo "dist 分支已更新: run ${{ github.run_number }}"
 
