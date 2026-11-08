@@ -40,7 +40,7 @@ AOSP kernel/common @ 0d8921531  (android14-6.1-2023-10_r17)
 
 | 层 | 内容 | 实测/预期耗时 | 用途 |
 |---|---|---|---|
-| **① Actions 缓存** | 解压好的 clang 工具链 + 上游源码树（约 2.7 GB） | **~1 分钟**（快路径） | 每次构建首选；key 绑 GKI pin + clang 版本 |
+| **① Actions 缓存** | 解压好的 clang 工具链 + 上游源码树（约 2.7 GB） | **~30–60 s**（run#10 实测步骤 2.5→6 约 2 分钟） | 每次构建首选；key 绑 GKI pin + clang 版本 |
 | **② 仓库 `cache` 分支** | GKI 源码 tar.gz（216 MB）+ clang tar.gz（720 MB），按 90 MB 分卷（git 单文件 100 MB 限制） | ~4–8 分钟（git fetch + git archive） | 冷启动 / fork / Actions 缓存被驱逐时的持久来源 |
 | ③ Google 直连 | googlesource `+archive` | ~5–6 分钟（且可能被截断） | 最后兜底 |
 

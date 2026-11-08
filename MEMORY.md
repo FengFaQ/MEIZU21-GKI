@@ -102,6 +102,10 @@
 | 15 | run#6 用仓库 cache 分支后，clang/GKI 两步反而更慢（229 s + 278 s，Google 直连是 214 s + 132 s） | `git fetch --depth 1` 拉 950 MB 分卷 + `git archive | tar` 解 1.5 GB 树的开销，比直接 HTTP 下载 + 解压更大 | 真正的快路径用 **Actions 缓存**（解压好的工具链+源码，key 绑 pin）；仓库 cache 分支只做持久/可移植兜底 |
 | 16 | cache 恢复日志 `cache 分支里没有 cache/clang`，实际回退 AOSP | prepare-cache 推分支时 `cp cache/. pkg/` 把 `cache/` 这层目录丢了，文件落在分支根 | 推送时 `cp cache/. pkg/cache/`；恢复脚本按 `cache/<key>/` 取 |
 | 17 | v2 重打包报「骨架无法用 AVB hash rule 校验 descriptor，拒绝写 digest」 | CI 模板是 payload 清零的 AVB **骨架**，salt+image 的 hash rule 永远不成立 | 新增 `--expect-image-size/--expect-salt`（来自 device facts），用已知原厂字段校验布局后再重算 |
+| 18 | 仓库 cache 分支 git fetch 卡住近 30 分钟 | 950 MB 分支在 Actions 网络上慢且时好时坏；无超时保护 | 恢复步骤加 `timeout 300`，超时按未命中回退 AOSP；真正的快路径用 Actions 缓存 |
+| 19 | 管理器 APK 只有 92 字节、证书解析失败 | GitHub 偶发限流/拦截，返回错误页而不是 APK；没有体积校验 | 双通道（API asset → 页面直链）+ 每次断言 `size > 1 MB` + 重试 |
+| 20 | `FinaSU 版本解析失败` | `curl -I`（HEAD）请求 `releases/latest` 时 GitHub 不返回 302，`url_effective` 仍是 latest 页 | 改 GET + `-o /dev/null -w %{url_effective}`；API/页面扫描兜底 |
+
 
 
 ## 6. 明确放弃 / 不做（本轮）

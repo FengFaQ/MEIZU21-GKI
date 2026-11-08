@@ -10,26 +10,34 @@
 用 **GKI android14-6.1（6.1.25 / os_patch 2023-10）+ 21 Pro 参考树的兼容层补丁 + FinaSU v1.5.0 内建**，
 在 GitHub Actions 里编出魅族 21（M2461）的 `Image`，再重打包成带 AVB 的 96 MiB `boot.img`（只替换 boot 分区）。
 
-## 1. 当前状态（2026-11-08）
+## 1. 当前状态（2026-11-08 更新：run#11 全绿）
 
 | 项 | 状态 |
 |---|---|
-| 设备事实（config / KMI / kCFI / AVB 骨架 / boot 头） | 🟡 正在产出（`device/meizu21/`） |
-| 01 补丁按 M2461 适配（2 处 sed） | ✅ 已做，且实测可干净应用到 GKI pin SHA |
-| FinaSU SUSFS-Inline 兼容性 | ✅ FinaSU `check_susfs_inline.sh` 对「上游+01」返回 0 |
-| AVB 骨架往返验证 | ✅ `repack(原厂Image, 骨架)` 与原厂 boot.img **sha256 完全相同** |
-| CI 工作流 | ✅ 已写（`meizu21.yml`），待首跑 |
-| 首次 CI 运行 | ❌ 未跑 |
-| 真机刷入 | ❌ 未做 |
+| 设备事实（config / KMI / kCFI / AVB 骨架 / boot 头） | ✅ 齐全（`device/meizu21/`） |
+| CI 完整流水线 | ✅ **run#11 全绿**（缓存 → 编译 → 三门禁 → v1/v2 重打包 → release + dist） |
+| release 产物 | ✅ `meizu21-11`（boot.img / boot-v2digest.img / Image / APK / 日志） |
+| dist 分支 | ✅ 已建立（本机取产物唯一通道） |
+| 真机刷入验证 | ❌ 未做（下一步，只刷非活动槽） |
 
-### 下一步（按顺序）
+### run#11 产物（已在本机独立复核）
 
-1. 补齐 `device/meizu21/` 下 5 个数据文件（config / Module.symvers / KMI manifest / kCFI 期望 / AVB 骨架）。
-2. 推 `main` → 手动 dispatch `meizu21.yml` → 看 job 日志。
-3. 首跑大概率会卡在编译（FinaSU 内建 + 6.1.25 的组合没有现成 CI 记录）。按报错逐条修；本地 WSL 预演（`memory/research/04-local-rehearsal.md`）会先暴露一批。
-4. 拿到 Image 后跑门禁 1/2/3，确认 `missing ∩ NEED == ∅`、kCFI 全 MATCH。
-5. 产物走 `dist` 分支取回（本机 github.com HTTPS 不通），只刷**非活动槽**。
-6. 首刷成功 → 用 dmesg 回填 kCFI 期望值，把门禁 3 转硬。
+| 文件 | 大小 | sha256 |
+|---|---|---|
+| `boot.img`（v1，原厂 vbmeta 字节） | 100,663,296 | `963224e79d29fe8348f7a4ef2f823bc8b69167c54edd7b33ef7aba052cdb44e6` |
+| `boot-v2digest.img`（v2，重算 descriptor） | 100,663,296 | `6c605f746fae7bf8392bc884001aba7453973f79d739321a3e6fcbf3dc5677c0` |
+| `Image`（GKI，6.1.25-android14-11-maybe-dirty） | 34,892,288 | `ca540bd7e22070b27804c60888b81a0276072ab87d707e8014308910199f890c` |
+| `FinaSU_v1.5.0_33174-release.apk` | 28,657,764 | `6860cc33fdf0889290c9a27ba3dc468c3d287824695b12eea7bcc42f546b6638` |
+
+门禁实测：版本串 PASS / `missing ∩ NEED = 0`（built 14,688 导出）/ kCFI **21 MATCH + 3 N/A**。
+AVB 审计（`audit_boot.py`）：v1 为「原厂 vbmeta 逐字节 + stale digest」；v2 的 `image_size=0x2148000`、
+`salt=Image sha256`、`digest=sha256(salt||image)` 均自洽，两者结构 PASS。
+
+### 下一步
+
+1. 用 `docs/FLASH_SOP.md` 的步骤**只刷非活动槽**（先 v1；不行再试 v2）。
+2. 首刷后按 SOP 回填 dmesg（kCFI `expected type`、Unknown symbol）。
+3. 真机通过后，`tools/fetch_dist.ps1` 可随时取回最新产物。
 
 ## 2. 仓库结构
 
@@ -104,26 +112,35 @@ Invoke-RestMethod "https://api.github.com/repos/FengFaQ/MEIZU21-GKI/actions/work
 > run#4 的 kCFI 门禁修复也已在参考 vmlinux 上复测通过（21 MATCH + 3 N/A）。
 
 
-## 6.1 run#6 结果（2026-11-08 16:45）——**内核编译 + 三门禁全绿，只差重打包 v2**
+## 6.1 CI 逐轮记录（2026-11-08，全部在 GitHub Actions）
 
-| 步骤 | 结果 | 关键数据 |
-|---|---|---|
-| 11. 编译 Image | ✅ **成功** | Image 34,892,288 B；banner 与 21 原厂逐字符一致 |
-| 12. 门禁 1/3 release 串 | ✅ PASS | `6.1.25-android14-11-maybe-dirty`（banner + kernel.release 都对） |
-| 13. 门禁 2/3 KMI | ✅ PASS | Built 14,688 导出；**missing ∩ NEED = 0**；NEED CRC vs stock 0 mismatched |
-| 14. 门禁 3/3 kCFI | ✅ PASS | **21 MATCH + 3 N/A + 0 MISSING**（24/24 覆盖，含 12 个 OneMind traceiter） |
-| 15. 重打包 | ❌ v1 成功 / **v2 失败** | v1 `SELF-CHECK PASSED`（vbmeta 与原厂逐字节相同）；v2 报「骨架无法用 AVB hash rule 校验 descriptor，拒绝写 digest」 |
+| run | 卡点 | 日志证据 | 修法 |
+|---|---|---|---|
+| #1 | config 断言 | `TRIM_UNUSED_KSYMS 必须关闭` | grep 模式补 `# ` |
+| #2 | GKI 下载 | `unexpected end of file`；119.6 MB / 应 216 MB | 重试 + `gzip -t` + 文件数断言 |
+| #3 | 编译后 `ls` | Image 已生成；`ls Module.symvers` 不存在 | 改 `vmlinux.symvers` |
+| #4 | 同上 | — | 被 #6 取代 |
+| #6 | **v2 重打包** | 编译成功、门禁 1/2/3 全 PASS；v2 报「骨架无法用 AVB hash rule 校验 descriptor」 | 新增 `--expect-image-size/--expect-salt`（用 device facts 校验布局） |
+| #7 | 卡在 git fetch | 仓库 cache 分支 950 MB fetch 卡住近 30 分钟 | 临时 `cancel-in-progress: true` 取消 + 恢复步骤加 `timeout 300` |
+| #9 | APK 下载 | `APK size=92`、证书解析失败 | 双通道下载 + `size > 1MB` 断言 |
+| #10 | FinaSU latest | `curl -I` HEAD 不 302 → 版本解析失败 | 改 GET 重定向 + API/页面三级兜底 |
+| #11 | — | 全部修复版：缓存命中、FinaSU latest、APK、编译、门禁、v1/v2 重打包 | 观察中 |
 
-**v2 失败根因**：CI 用 96 MiB 的 AVB *骨架*（payload 全 0）做模板，脚本原有的「用 AVB hash rule
-反算 descriptor 布局」在骨架上必然失败。修法：新增 `--expect-image-size` / `--expect-salt`
-（值来自 `device/meizu21/source.txt` 的 `avb_vbmeta_offset` 与 `kernel_sha256`），用已知原厂事实校验
-descriptor 的 image_size/salt 两个字段（偏移固定，布局错了就对不上），通过后才重算 digest。
-已在本机用骨架 + 原厂 kernel 验证：v2 输出与原厂 boot.img **sha256 完全相同**；换成 34,892,288 B 的
-Image 后 image_size/salt/digest 三处更新正确，`audit_boot.py` 判 digest 自洽。
+### run#6 关键实测（内核侧已全部通过）
 
-**run#6 缓存未命中**：`cache` 分支推送时把 `cache/` 这一层目录丢了（文件直接落在分支根目录），
-恢复脚本按 `cache/<key>/` 取 → 没找到，回退 AOSP。已修（prepare-cache 推送时补回 `cache/` 层级），
-`cache-trigger.txt` revision 2 会触发重建。
+- Image **34,892,288 B**，banner 与魅族 21 原厂逐字符一致；
+- 门禁 1 PASS（`6.1.25-android14-11-maybe-dirty`）；
+- 门禁 2 PASS（built 14,688 导出，**missing ∩ NEED = 0**，NEED CRC vs stock 0 mismatch）；
+- 门禁 3 **21 MATCH + 3 N/A**（含 12 个 OneMind traceiter）；
+- v1 重打包 PASS（vbmeta 与原厂逐字节相同）。
+
+### 编译加速实测
+
+| 路径 | clang 步 | GKI 步 | 合计 |
+|---|---|---|---|
+| Google 直连 | 214 s | 132 s | 346 s |
+| 仓库 cache 分支 | 229 s | 278 s | 507 s（更慢） |
+| **Actions 缓存命中** | — | — | **~30–60 s**（run#10 实测步骤 2.5→6 共约 2 分钟） |
 
 ## 7. 编译缓存（2026-11-08 新增，三层）
 

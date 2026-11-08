@@ -50,9 +50,8 @@ permissions:
 
 concurrency:
   group: meizu21-gki
-  # 注意：跑长编译时一般要求 false；这里临时设 true 是为了让新 run 取消卡住的旧 run。
-  # 等流水线稳定后可以改回 false。
-  cancel-in-progress: true
+  # 稳定后恢复：不主动取消正在跑的长编译（临时 true 只用于当时干掉卡死的 run）
+  cancel-in-progress: false
 
 env:
   # ---- 全部 pin 死，保证可复现 ----
@@ -578,14 +577,16 @@ jobs:
           EOF
           gh release create "$TAG" --title "$TITLE" --notes-file /tmp/release_notes.md \
             out/boot.img out/boot-v2digest.img out/Image out/vmlinux.symvers out/kernel.config \
-            "out/${MANAGER_APK}" out/boot_avb_report.txt out/gate1_version.txt \
-            out/gate2_kmi.log out/gate3_kcfi.log out/MANAGER_INFO.txt out/sha256sums.txt \
+            "out/${MANAGER_APK}" out/boot_avb_report.txt out/boot_avb_report_v2.txt \
+            out/gate1_version.txt out/gate2_kmi.log out/gate3_kcfi.log \
+            out/MANAGER_INFO.txt out/sha256sums.txt out/build_kernel.log \
             || echo "WARN: release 发布失败（不影响 dist 分支）"
           # dist 分支（本机 github.com HTTPS 不通，只能走这条取产物）
           mkdir -p /tmp/distpkg
           cp out/boot.img out/boot-v2digest.img out/Image out/vmlinux.symvers out/kernel.config \
-             "out/${MANAGER_APK}" out/boot_avb_report.txt out/gate1_version.txt \
-             out/gate2_kmi.log out/gate3_kcfi.log out/MANAGER_INFO.txt out/sha256sums.txt /tmp/distpkg/ 2>/dev/null || true
+             "out/${MANAGER_APK}" out/boot_avb_report.txt out/boot_avb_report_v2.txt \
+             out/gate1_version.txt out/gate2_kmi.log out/gate3_kcfi.log \
+             out/MANAGER_INFO.txt out/sha256sums.txt out/build_kernel.log /tmp/distpkg/ 2>/dev/null || true
           cd /tmp/distpkg
           git init -q -b dist
           git config user.name "dsh-ci"
