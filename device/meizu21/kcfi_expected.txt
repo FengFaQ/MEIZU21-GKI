@@ -1,0 +1,31 @@
+# kCFI expected type hashes for Meizu 21 (M2461)
+# format: <func|traceiter> <symbol> <0xhash|->
+# func 组：5 个 device_verified（在 21 原厂 kernel Image 里按 __ksymtab→函数入口前 4B 精确命中），
+#   4 个 device_present_not_anchored（值确实在原厂 Image 里，但同签名函数共享，无法逐函数锚定），
+#   3 个 N/A（原版脚本里就没有期望值）。
+# traceiter 组：值继承自 21 Pro 参考树 check_kcfi.py；kCFI 类型哈希由「回调签名+编译参数」唯一决定，
+#   两机 KMI 同源（2779 个 NEED CRC 差异 0），所以同签名 ⇒ 同哈希；但仍须在本仓库自编译 vmlinux 上复核。
+func shrink_slab 0xc3b4beac
+func setup_per_zone_wmarks 0xa540670c
+func find_lock_task_mm 0xea4a421a
+func sched_show_task 0x1703dde1
+func android_debug_symbol 0x0ec970ab
+func kallsyms_lookup_name 0xaa7e236f
+func sysctl_sched_uclamp_get 0x8d4c5b69
+func sysctl_sched_uclamp_set 0x06da45e1
+func end_buffer_write_sync 0xd2948eb7
+func do_shrink_slab N/A
+func clk_set_duty_cycle N/A
+func __brelse N/A
+traceiter __traceiter_android_vh_extfrag_for_order 0x55ddc73d
+traceiter __traceiter_android_vh_tune_watermark_ratio 0xd25b6965
+traceiter __traceiter_android_vh_mm_vip_alloc_harder 0xfab75373
+traceiter __traceiter_android_vh_mm_vip_kvmalloc 0xd25b6965
+traceiter __traceiter_android_vh_mm_vip_alloc_harder_stat 0x82360994
+traceiter __traceiter_android_vh_ra_tuning_max_page 0x4f5f504f
+traceiter __traceiter_android_vh_memcg_filepages_protect 0xcacb6617
+traceiter __traceiter_android_vh_memcg_protect_lru_gen_add_folio 0xb2bf7b95
+traceiter __traceiter_android_vh_smartzram_tune_swappiness 0xc2e31966
+traceiter __traceiter_android_vh_tune_scan_type 0xa57a1738
+traceiter __traceiter_android_vh_binder_alloc 0x65f310d0
+traceiter __traceiter_android_vh_binder_ioctl 0xda47f60c

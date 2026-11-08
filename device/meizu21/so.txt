@@ -1,0 +1,9 @@
+# 内核 release 串（门禁 1 的唯一期望值）
+# 来源：魅族 21 Flyme 12.7 原厂 boot.img 内 `Linux version` 与内核自身 vermagic；
+#      同时等于 system_dlkm.img 里 /lib/modules/<release>/ 的目录名（逐字符）。
+# 注意：两机型（M2461/M2481）该串相同，所以不能靠它区分机型。
+kernel_release=6.1.25-android14-11-maybe-dirty
+kernel_version_major=6.1.25
+android_release=android14
+kmi_generation=11
+kbuild_build_version=1

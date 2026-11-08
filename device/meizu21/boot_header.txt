@@ -1,0 +1,23 @@
+# 原厂 boot_img_hdr v4 字段（小端）——重打包时逐字段照抄
+# 来源：C:\MEIZU21_12.7\boot.img，sha256 8c899eb3b7fcb65eff6bb4afd015f90984ce50d351eceb7eda7ef06bbc4619f5
+magic=ANDROID!
+kernel_size=33892864
+ramdisk_size=0
+os_version_raw=0x1C00017A
+os_version=14.0.0
+os_patch_level=2023-10
+header_size=1584
+header_version=4
+cmdline=
+signature_size=0
+header_padded_to=4096
+kernel_offset=4096
+kernel_align=4096
+
+# 布局
+# [0x0000,0x0630)   header 1584 B
+# [0x0630,0x1000)   0 填充
+# [0x1000,0x2051000) kernel Image 33892864 B
+# [0x2051000,0x2054000) 0 填充
+# [0x2054000,0x20549C0) AVB0 (vbmeta 2496 B)
+# [EOF-64,EOF)      AVBf footer

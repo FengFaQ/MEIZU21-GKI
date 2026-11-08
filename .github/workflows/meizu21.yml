@@ -1,0 +1,421 @@
+name: 魅族 21 GKI 构建
+
+# 只有手动触发：workflow_dispatch.inputs 上限 10 个（GitHub 硬限制，超限会让整个 workflow
+# 注册失败 → run 里 0 job，且不报语法错）。push 触发在历史上也踩过 0 job 的坑，别加。
+on:
+  workflow_dispatch:
+    inputs:
+      hook_backend:
+        description: 'FinaSU syscall hook 后端'
+        required: true
+        default: inline
+        type: choice
+        options: [inline, tracepoint]
+      strict_kcfi:
+        description: '门禁 3（kCFI）是否硬失败'
+        required: true
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      publish:
+        description: '是否发布 release + 更新 dist 分支'
+        required: true
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      emit_v2_digest:
+        description: '是否额外产出 v2（重算 AVB digest）镜像'
+        required: true
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: meizu21-gki
+  cancel-in-progress: false
+
+env:
+  # ---- 全部 pin 死，保证可复现 ----
+  GKI_SHA: 0d89215310919593150f0ef047f9fd9902e02bc7
+  GKI_URL: https://android.googlesource.com/kernel/common/+archive/0d89215310919593150f0ef047f9fd9902e02bc7.tar.gz
+  FINASU_REF: v1.5.0
+  FINASU_COMMIT: fbf8e003d902c43213d435632a22e4fb1a219aeb
+  CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-release/clang-r487747c.tar.gz
+  APK_URL: https://github.com/LyraVoid/FinaSU/releases/download/v1.5.0/FinaSU_v1.5.0_33174-release.apk
+  APK_SHA256: 6860cc33fdf0889290c9a27ba3dc468c3d287824695b12eea7bcc42f546b6638
+  # FinaSU v1.5.0 管理器签名证书（DER 长度 + sha256），已在本机实测：
+  KSU_EXPECTED_SIZE: '0x02cc'
+  KSU_EXPECTED_HASH: 2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458
+  DEVICE_DIR: device/meizu21
+  MAKE_JOBS: '4'
+  KBUILD_BUILD_USER: build-user
+  KBUILD_BUILD_HOST: build-host
+  KBUILD_BUILD_VERSION: '1'
+  # 魅族 21 原厂内核 banner 的构建时间（逐字符，见 device/meizu21/source.txt）
+  KBUILD_BUILD_TIMESTAMP: Wed Oct 28 18:11:17 UTC 2026
+
+jobs:
+  build:
+    name: 编译 + 门禁 + 重打包
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: 0. 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 1. 清理磁盘 / 打印环境
+        run: |
+          echo "=== 清理前 ==="; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/boost /usr/share/swift 2>/dev/null || true
+          sudo apt-get clean
+          echo "=== 清理后 ==="; df -h / | tail -1
+          nproc; free -h
+
+      - name: 2. 安装构建依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev lz4 zstd cpio rsync \
+                 dwarves kmod file xz-utils
+          which pahole && pahole --version || echo "WARN: pahole 缺失（CONFIG_DEBUG_INFO_BTF=y 会炸）"
+          which dtc || true
+
+      - name: 3. 下载 clang-r487747c（Android clang 17.0.2）
+        run: |
+          mkdir -p "$RUNNER_TEMP/toolchain"
+          curl -sSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/clang.tar.gz" "$CLANG_URL"
+          ls -la "$RUNNER_TEMP/clang.tar.gz"
+          tar -xzf "$RUNNER_TEMP/clang.tar.gz" -C "$RUNNER_TEMP/toolchain"
+          rm -f "$RUNNER_TEMP/clang.tar.gz"
+          CLANG_BIN="$(dirname "$(find "$RUNNER_TEMP/toolchain" -type f -name clang -path '*/bin/*' | head -1)")"
+          test -n "$CLANG_BIN" || { echo "找不到 clang"; exit 1; }
+          echo "$CLANG_BIN" >> "$GITHUB_PATH"
+          export PATH="$CLANG_BIN:$PATH"
+          clang --version | head -2
+          clang --version | grep -q "17.0.2" || { echo "clang 版本不是 17.0.2"; exit 1; }
+          echo "CLANG_BIN=$CLANG_BIN" >> "$GITHUB_ENV"
+
+      - name: 4. 校验设备事实（机型门禁）
+        run: |
+          set -euo pipefail
+          D="$DEVICE_DIR"
+          for f in source.txt so.txt boot_header.txt stock_kernel.config stock_Module.symvers \
+                   module_kmi_manifest.txt kcfi_expected.txt \
+                   avb_template/stock_boot_skeleton.img.zlib avb_template/source.txt; do
+            test -f "$D/$f" || { echo "缺少设备事实文件: $D/$f"; exit 1; }
+          done
+          grep -q '8c899eb3b7fcb65eff6bb4afd015f90984ce50d351eceb7eda7ef06bbc4619f5' "$D/source.txt" \
+            || { echo "source.txt 里没有 Flyme 12.7 原厂 boot sha256"; exit 1; }
+          grep -q 'meizu21' "$D/source.txt" || { echo "source.txt 不是 meizu21"; exit 1; }
+          RELEASE="$(sed -n 's/^kernel_release[[:space:]]*=[[:space:]]*//p' "$D/so.txt")"
+          test "$RELEASE" = "6.1.25-android14-11-maybe-dirty" || { echo "so.txt 的 release 串不对: $RELEASE"; exit 1; }
+          echo "设备事实 OK: release=$RELEASE"
+          wc -l "$D/stock_kernel.config" "$D/stock_Module.symvers" "$D/module_kmi_manifest.txt"
+
+      - name: 5. 下载 GKI 源码 @ pin SHA
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/gki.tar.gz" "$GKI_URL"
+          ls -la "$RUNNER_TEMP/gki.tar.gz"
+          mkdir -p common
+          tar -xzf "$RUNNER_TEMP/gki.tar.gz" -C common
+          rm -f "$RUNNER_TEMP/gki.tar.gz"
+          V="$(sed -n 's/^VERSION = //p' common/Makefile)"; P="$(sed -n 's/^PATCHLEVEL = //p' common/Makefile)"
+          S="$(sed -n 's/^SUBLEVEL = //p' common/Makefile)"
+          echo "上游版本: $V.$P.$S"
+          test "$V.$P.$S" = "6.1.25" || { echo "上游版本不是 6.1.25"; exit 1; }
+          ls common/fs/susfs.c 2>/dev/null && { echo "上游已有 fs/susfs.c？异常"; exit 1; } || true
+
+      - name: 6. 打补丁 + 放入 SUSFS 内核实现
+        run: |
+          set -euo pipefail
+          cd common
+          git init -q . && git config user.email dsh@local && git config user.name dsh
+          git apply --check ../patches/01-kernel-common.patch
+          git apply ../patches/01-kernel-common.patch
+          cp ../kernel-add/fs/susfs.c fs/susfs.c
+          cp ../kernel-add/include/linux/susfs.h ../kernel-add/include/linux/susfs_def.h include/linux/
+          # 01 补丁把 IKCONFIG 的内容指向 arch/arm64/configs/m2461_stock.config（/proc/config.gz 伪装）
+          cp ../device/meizu21/stock_kernel.config arch/arm64/configs/m2461_stock.config
+          echo "=== 补丁后自检 ==="
+          grep -q 'ksu_handle_execveat' fs/exec.c && echo "OK fs/exec.c"
+          grep -q 'susfs_is_current_ksu_domain' include/linux/susfs_def.h && echo "OK susfs_def.h"
+          grep -q 'm2461_stock.config' kernel/Makefile && echo "OK config_data 指向 m2461"
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig && echo "OK KSU Kconfig 已挂"
+
+      - name: 7. 集成 FinaSU @ v1.5.0
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "$FINASU_REF" https://github.com/LyraVoid/FinaSU.git FinaSU
+          HEAD_SHA="$(git -C FinaSU rev-parse HEAD)"
+          echo "FinaSU HEAD=$HEAD_SHA"
+          test "$HEAD_SHA" = "$FINASU_COMMIT" || { echo "FinaSU tag 指向的 commit 与 pin 不符"; exit 1; }
+          cd common
+          ../FinaSU/kernel/setup.sh --dir "$PWD/../FinaSU"
+          test -e drivers/kernelsu/Kbuild || { echo "drivers/kernelsu 没接上"; exit 1; }
+          echo "=== FinaSU SUSFS-Inline 入口自检 ==="
+          sh ../FinaSU/kernel/tools/check_susfs_inline.sh "$PWD"
+
+      - name: 8. 生成 .config（原厂 config + FinaSU 开关 + olddefconfig）
+        run: |
+          set -euo pipefail
+          cd common
+          cp ../device/meizu21/stock_kernel.config .config
+          sed -i '/^CONFIG_UNUSED_KSYMS_WHITELIST=/d' .config
+          scripts/config --disable TRIM_UNUSED_KSYMS
+          scripts/config --enable KSU
+          scripts/config --enable KSU_SUSFS
+          if [ "${{ inputs.hook_backend }}" = "inline" ]; then
+            scripts/config --enable KSU_HOOK_SUSFS_INLINE
+            scripts/config --disable KSU_HOOK_TRACEPOINT
+          else
+            scripts/config --enable KSU_HOOK_TRACEPOINT
+            scripts/config --disable KSU_HOOK_SUSFS_INLINE
+          fi
+          make ARCH=arm64 LLVM=1 olddefconfig
+          echo "=== 关键配置 ==="
+          grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_HOOK|KSU_DYNAMIC_MANAGER|KALLSYMS_ALL|KPROBES|EXT4_FS|THREAD_INFO_IN_TASK|HEADERS_INSTALL|TRIM_UNUSED_KSYMS|LTO_NONE|CFI_CLANG|LOCALVERSION|IKCONFIG)' .config || true
+          echo "=== 断言 ==="
+          need() { grep -q "^$1=y" .config || { echo "配置缺失: $1"; exit 1; }; }
+          need CONFIG_KSU
+          need CONFIG_KSU_SUSFS
+          need CONFIG_KALLSYMS_ALL
+          need CONFIG_KPROBES
+          need CONFIG_EXT4_FS
+          need CONFIG_THREAD_INFO_IN_TASK
+          need CONFIG_HEADERS_INSTALL
+          need CONFIG_LTO_NONE
+          need CONFIG_CFI_CLANG
+          need CONFIG_IKCONFIG
+          grep -q '^CONFIG_TRIM_UNUSED_KSYMS is not set' .config || { echo "TRIM_UNUSED_KSYMS 必须关闭"; exit 1; }
+          if [ "${{ inputs.hook_backend }}" = "inline" ]; then
+            need CONFIG_KSU_HOOK_SUSFS_INLINE
+            grep -q '^# CONFIG_KSU_HOOK_TRACEPOINT is not set' .config || { echo "inline 模式下 tracepoint 必须关闭"; exit 1; }
+          else
+            need CONFIG_KSU_HOOK_TRACEPOINT
+          fi
+          echo "配置 OK"
+
+      - name: 9. 下载并校验管理器 APK（提证书，双保险）
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 5 --retry-delay 5 -o manager.apk "$APK_URL"
+          SIZE="$(stat -c%s manager.apk)"
+          SHA="$(sha256sum manager.apk | cut -d' ' -f1)"
+          echo "APK size=$SIZE sha256=$SHA"
+          test "$SHA" = "$APK_SHA256" || { echo "APK sha256 与 pin 不符"; exit 1; }
+          CERT_LINE="$(python3 scripts/extract_manager_cert.py manager.apk | head -1)"
+          echo "cert: $CERT_LINE"
+          C_SIZE="$(echo "$CERT_LINE" | awk '{print $1}')"
+          C_HASH="$(echo "$CERT_LINE" | awk '{print $2}')"
+          test "$C_SIZE" = "$KSU_EXPECTED_SIZE" || { echo "证书长度不符: $C_SIZE != $KSU_EXPECTED_SIZE"; exit 1; }
+          test "$C_HASH" = "$KSU_EXPECTED_HASH" || { echo "证书哈希不符: $C_HASH"; exit 1; }
+          echo "证书与 pin 一致"
+
+      - name: 10. make headers_install（FinaSU preinit runner 依赖）
+        run: |
+          set -euo pipefail
+          cd common
+          make ARCH=arm64 LLVM=1 headers_install
+          test -f usr/include/linux/unistd.h || { echo "usr/include 未生成，preinit 会被静默关闭"; exit 1; }
+          echo "headers_install OK"
+
+      - name: 11. 编译 Image（make, 非 kleaf）
+        run: |
+          set -euo pipefail
+          cd common
+          rm -f .version
+          export PATH="$CLANG_BIN:$PATH"
+          make -j"$MAKE_JOBS" ARCH=arm64 LLVM=1 LLVM_IAS=1 Image \
+            KSU_REQUIRE_PREINIT=1 \
+            KSU_EXPECTED_SIZE="$KSU_EXPECTED_SIZE" \
+            KSU_EXPECTED_HASH="$KSU_EXPECTED_HASH" 2>&1 | tee ../build_kernel.log
+          test -f arch/arm64/boot/Image || { echo "没有 Image 产物"; exit 1; }
+          ls -la arch/arm64/boot/Image vmlinux Module.symvers
+          echo "=== Linux version ==="
+          grep -a -m1 'Linux version' arch/arm64/boot/Image | head -c 400; echo
+          cp build_kernel.log ../build_kernel.log 2>/dev/null || true
+
+      - name: 12. 门禁 1/3 —— release 串逐字符
+        run: |
+          set -euo pipefail
+          cd common
+          EXP="$(sed -n 's/^kernel_release[[:space:]]*=[[:space:]]*//p' "../$DEVICE_DIR/so.txt")"
+          BANNER="$(grep -a -m1 'Linux version' arch/arm64/boot/Image)"
+          echo "期望: $EXP"
+          echo "实际: $BANNER"
+          case "$BANNER" in
+            *"$EXP"*) echo "PASS 门禁 1/3" ;;
+            *) echo "FAIL 门禁 1/3：Image 里没有期望的 release 串"; exit 1 ;;
+          esac
+          KREL="$(cat include/config/kernel.release 2>/dev/null || true)"
+          echo "include/config/kernel.release=$KREL"
+          test "$KREL" = "$EXP" || { echo "FAIL: kernel.release 与期望不符"; exit 1; }
+          {
+            echo "release_expected=$EXP"
+            echo "release_actual=$KREL"
+            echo "banner=$BANNER"
+          } > ../gate1_version.txt
+
+      - name: 13. 门禁 2/3 —— KMI 审计（missing ∩ NEED 必须为空）
+        run: |
+          set -euo pipefail
+          cd common
+          python3 ../scripts/check_krcrc_symvers.py \
+            Module.symvers \
+            "../$DEVICE_DIR/stock_Module.symvers" \
+            "../$DEVICE_DIR/module_kmi_manifest.txt" \
+            arch/arm64/boot/Image 2>&1 | tee ../gate2_kmi.log
+
+      - name: 14. 门禁 3/3 —— kCFI 类型哈希
+        run: |
+          set -euo pipefail
+          cd common
+          set +e
+          python3 ../scripts/check_kcfi.py vmlinux "$CLANG_BIN" "../$DEVICE_DIR/kcfi_expected.txt" 2>&1 | tee ../gate3_kcfi.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          echo "check_kcfi exit=$RC"
+          if [ "$RC" -ne 0 ]; then
+            if [ "${{ inputs.strict_kcfi }}" = "true" ]; then
+              echo "FAIL 门禁 3/3（strict_kcfi=true）"; exit 1
+            fi
+            echo "WARN 门禁 3/3 未全绿（strict_kcfi=false，继续；首刷后用 dmesg 回填期望值）"
+          fi
+
+      - name: 15. 重打包 boot.img（v1 原厂 vbmeta / v2 重算 digest）
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python3 - "$DEVICE_DIR" <<'PY'
+          import hashlib, sys, zlib, pathlib
+          dev = pathlib.Path(sys.argv[1])
+          meta = {}
+          for line in (dev / "avb_template/source.txt").read_text(encoding="utf-8").splitlines():
+              if line.startswith("#") or "=" not in line:
+                  continue
+              k, v = line.split("=", 1)
+              meta[k.strip()] = v.strip()
+          z = dev / "avb_template/stock_boot_skeleton.img.zlib"
+          raw = zlib.decompress(z.read_bytes())
+          sha = hashlib.sha256(raw).hexdigest()
+          want = meta.get("skeleton_raw_sha256", "")
+          print(f"[skeleton] {len(raw)} bytes sha256={sha} (expect {want})")
+          assert len(raw) == 100663296, "skeleton 解压后不是 96 MiB"
+          assert sha == want, "skeleton sha256 与 source.txt 记录不符（模板被换过？）"
+          assert meta.get("boot_sha256", "").startswith("8c899eb3b7fcb65e"), "AVB 模板不是魅族 21 Flyme 12.7 的 boot"
+          assert meta.get("device", "") == "meizu21", "AVB 模板不是 meizu21 机型"
+          pathlib.Path("/tmp/stock_boot_skeleton.img").write_bytes(raw)
+          print("[skeleton] OK")
+          PY
+          img_size="$(stat -c%s common/arch/arm64/boot/Image)"
+          echo "Image size=$img_size"
+          test "$img_size" -lt 94371840 || { echo "Image 太大（>90 MiB），会超出 boot 分区 payload 安全区"; exit 1; }
+          python3 scripts/repack_avb_boot.py common/arch/arm64/boot/Image /tmp/stock_boot_skeleton.img out/boot.img
+          if [ "${{ inputs.emit_v2_digest }}" = "true" ]; then
+            python3 scripts/repack_avb_boot.py common/arch/arm64/boot/Image /tmp/stock_boot_skeleton.img \
+              out/boot-v2digest.img --update-digest
+          fi
+          python3 scripts/audit_boot.py out/boot.img | tee out/boot_avb_report.txt
+          ls -la out/
+          (cd out && sha256sum * > sha256sums.txt && cat sha256sums.txt)
+
+      - name: 16. 汇总产物
+        run: |
+          set -euo pipefail
+          cp common/arch/arm64/boot/Image out/Image
+          cp common/Module.symvers out/Module.symvers
+          cp common/.config out/kernel.config
+          cp manager.apk out/FinaSU_v1.5.0_33174-release.apk
+          cp build_kernel.log out/ 2>/dev/null || true
+          cp gate1_version.txt out/ 2>/dev/null || true
+          cp gate2_kmi.log out/ 2>/dev/null || true
+          cp gate3_kcfi.log out/ 2>/dev/null || true
+          {
+            echo "device=meizu21"
+            echo "run=${{ github.run_number }}"
+            echo "gki_sha=$GKI_SHA"
+            echo "finasu_ref=$FINASU_REF ($FINASU_COMMIT)"
+            echo "hook_backend=${{ inputs.hook_backend }}"
+            echo "manager_apk=FinaSU_v1.5.0_33174-release.apk"
+            echo "manager_apk_sha256=$APK_SHA256"
+            echo "ksu_expected_size=$KSU_EXPECTED_SIZE"
+            echo "ksu_expected_hash=$KSU_EXPECTED_HASH"
+            echo "kernel_image_size=$(stat -c%s out/Image)"
+            echo "kernel_image_sha256=$(sha256sum out/Image | cut -d' ' -f1)"
+            echo "built_at=$(date -u +%FT%TZ)"
+          } | tee out/MANAGER_INFO.txt
+          mv out/FinaSU_v1.5.0_33174-release.apk out/ 2>/dev/null || true
+          ls -la out/
+
+      - name: 17. 发布 release + 更新 dist 分支
+        if: ${{ inputs.publish == 'true' && success() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="meizu21-${{ github.run_number }}"
+          TITLE="魅族 21 GKI · FinaSU · ${{ inputs.hook_backend }} · run#${{ github.run_number }}"
+          cat > /tmp/release_notes.md <<'EOF'
+          设备：魅族 21（M2461 / Flyme 12.7）
+          GKI：6.1.25-android14-11-maybe-dirty（android14-6.1-2023-10_r17）
+          Root：FinaSU v1.5.0（内核内建 KSU，SUSFS Inline / Tracepoint 由 workflow 输入决定）
+
+          产物：
+          - boot.img（v1，原厂 vbmeta 字节）→ **先刷这个**
+          - boot-v2digest.img（v2，重算 AVB hash descriptor）→ v1 不行再试
+          - Image / Module.symvers / kernel.config / 门禁日志 / MANAGER_INFO.txt
+
+          只刷非活动槽：
+          ```
+          fastboot flash boot_b boot.img
+          fastboot --set-active=b
+          # 起不来：fastboot --set-active=a
+          ```
+
+          **管理器必须装本 release 附带的 FinaSU APK**（内核里编的是它的证书哈希，装别的版本会显示“未安装”）。
+          EOF
+          gh release create "$TAG" --title "$TITLE" --notes-file /tmp/release_notes.md \
+            out/boot.img out/boot-v2digest.img out/Image out/Module.symvers out/kernel.config \
+            out/FinaSU_v1.5.0_33174-release.apk out/boot_avb_report.txt out/gate1_version.txt \
+            out/gate2_kmi.log out/gate3_kcfi.log out/MANAGER_INFO.txt out/sha256sums.txt \
+            || echo "WARN: release 发布失败（不影响 dist 分支）"
+          # dist 分支（本机 github.com HTTPS 不通，只能走这条取产物）
+          mkdir -p /tmp/distpkg
+          cp out/boot.img out/boot-v2digest.img out/Image out/Module.symvers out/kernel.config \
+             out/FinaSU_v1.5.0_33174-release.apk out/boot_avb_report.txt out/gate1_version.txt \
+             out/gate2_kmi.log out/gate3_kcfi.log out/MANAGER_INFO.txt out/sha256sums.txt /tmp/distpkg/ 2>/dev/null || true
+          cd /tmp/distpkg
+          git init -q -b dist
+          git config user.name "dsh-ci"
+          git config user.email "dsh-ci@users.noreply.github.com"
+          git add -A
+          git commit -qm "dist: run ${{ github.run_number }} (${{ inputs.hook_backend }})"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" dist
+          echo "dist 分支已更新: run ${{ github.run_number }}"
+
+      - name: 18. 上传构建产物（无论成败）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meizu21-gki-run-${{ github.run_number }}
+          retention-days: 30
+          path: |
+            out/**
+            build_kernel.log
+            gate1_version.txt
+            gate2_kmi.log
+            gate3_kcfi.log
+          if-no-files-found: warn
+
+      - name: 19. 失败时打印关键日志
+        if: failure()
+        run: |
+          echo "==== 最后 200 行编译日志 ===="
+          tail -200 build_kernel.log 2>/dev/null || true
+          echo "==== 门禁日志 ===="
+          cat gate1_version.txt gate2_kmi.log gate3_kcfi.log 2>/dev/null || true

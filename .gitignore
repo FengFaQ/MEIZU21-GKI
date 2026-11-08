@@ -1,0 +1,12 @@
+# 构建产物 / 本地工作副本（配方仓库只放配方）
+/common/
+/FinaSU/
+/out/
+/distpkg/
+*.img
+*.apk
+*.log
+!*skeleton.img.zlib
+__pycache__/
+*.pyc
+.venv/

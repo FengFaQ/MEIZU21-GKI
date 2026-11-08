@@ -1,0 +1,13 @@
+# 统一 LF，避免 Windows 侧提交把补丁/配置换成 CRLF 导致 CI 失败
+* text=auto eol=lf
+*.patch text eol=lf
+*.config text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.zlib binary
+*.img binary
+*.apk binary
