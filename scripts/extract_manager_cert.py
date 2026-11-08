@@ -113,16 +113,28 @@ def extract_certs(data):
         off += pair_len
 
 
+def usage(stream=sys.stderr, rc=2):
+    print("usage: extract_manager_cert.py [--labeled] <apk> [<apk> ...]", file=stream)
+    print("", file=stream)
+    print("Prints the DER signer certificate size and SHA-256 of a signed APK, in the",
+          file=stream)
+    print("form FinaSU's kernel/Kbuild expects for the second trust slot:", file=stream)
+    print("    0x02cc 2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458",
+          file=stream)
+    print("With --labeled it prints 'size=0x02cc' and 'hash=...' instead.", file=stream)
+    return rc
+
+
 def main(argv):
     args = list(argv)
+    if "-h" in args or "--help" in args:
+        return usage(sys.stdout, 0)
     labeled = False
     if "--labeled" in args:
         labeled = True
         args = [a for a in args if a != "--labeled"]
     if not args:
-        print("usage: extract_manager_cert.py [--labeled] <apk> [<apk> ...]",
-              file=sys.stderr)
-        return 2
+        return usage()
 
     seen = set()
     found = False

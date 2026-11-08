@@ -18,10 +18,18 @@ This script reports three things, with deliberately different severities:
       steady state is "Missing 6", and those 6 were verified to be neither NEED nor
       DEF in module_kmi_manifest.txt.  Do NOT chase a non-zero value.
 
-  (2) missing ∩ NEED                   HARD GATE
-      Symbols a vendor module actually requires but the kernel does not export.
-      This must be empty.  A non-empty set means an ``Unknown symbol`` at load time
-      and a device stuck on the boot screen.  This, not (1), is the real criterion.
+  (2) (stock - built) INTERSECT NEED   HARD GATE
+      Symbols the stock kernel exported *and* a vendor module requires, that this
+      build no longer exports.  This must be empty.  A non-empty set means an
+      ``Unknown symbol`` at load time and a device stuck on the boot screen.
+
+      Note the intersection with the stock baseline is essential.  The naive test
+      "NEED - built" is always non-empty: on the M2461 manifest 1401 of the 4180
+      NEED symbols are not in the stock Module.symvers either, because they are
+      satisfied by other vendor modules (module-to-module dependencies) or are not
+      kernel-exported at all.  The stock kernel did not export them, so their
+      absence from our build is not a regression.  Only a symbol the *stock* kernel
+      exported is a symbol our kernel is on the hook for.
 
   (3) Raw CRC matches                  INFORMATIONAL
       How many stock symbols also have an identical CRC in the build.
@@ -237,8 +245,22 @@ def main(argv=None):
         die(str(e))
 
     missing_stock = sorted(set(stock) - set(built))
-    # (2) the real gate: symbols a vendor module NEEDs that the kernel does not export
-    missing_need = sorted(n for n in need if n not in built)
+
+    # (2) the real gate.
+    #
+    # It is tempting to use "NEED - built", but that is wrong and always fails: 1401
+    # of the M2461 manifest's 4180 NEED symbols are not in the stock Module.symvers
+    # either - they are satisfied by *other vendor modules* (module-to-module deps)
+    # or are simply not kernel-exported at all.  The stock kernel did not export
+    # them, so their absence from our build is not a regression.
+    #
+    # The correct reading (and the one the reference repo settled on) is:
+    #     (stock - built) INTERSECT NEED   must be empty
+    # i.e. "every symbol that the stock kernel exported AND a vendor module needs is
+    # still exported".  This is what actually predicts an "Unknown symbol" panic.
+    missing_need = sorted(n for n in need if n in stock and n not in built)
+    # informational: NEED entries the stock baseline never covered
+    need_outside_stock = sorted(n for n in need if n not in stock)
     crc_match = sum(1 for k, v in stock.items() if built.get(k) == v)
 
     # NEED CRC cross-check against both baselines
@@ -269,8 +291,12 @@ def main(argv=None):
         print("    %s%s" % (preview, more))
         in_need = [s for s in missing_stock if s in need]
         if in_need:
-            print("    !! %d of these ARE listed as NEED - they belong in (2)" % len(in_need))
-    print("(2) missing INTSCT NEED     : %d   [HARD GATE - must be 0]" % len(missing_need))
+            print("    !! %d of these ARE listed as NEED - they are gate (2) failures: %s"
+                  % (len(in_need), ", ".join(in_need[:8])))
+    print("(2) (stock-built) ∩ NEED    : %d   [HARD GATE - must be 0]" % len(missing_need))
+    print("    NEED symbols the stock baseline never exported: %d   [informational - "
+          "they come from other modules or are not kernel-exported]"
+          % len(need_outside_stock))
     print("(3) Raw CRC matches         : %d / %d   [informational]"
           % (crc_match, len(stock)))
     print("")

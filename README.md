@@ -62,7 +62,11 @@ Root 用 **release 附带的那份 FinaSU APK**（内核里编的是它的证书
 
 ## 触发
 
-只有 `workflow_dispatch`（手动）。`workflow_dispatch.inputs` 上限 10 个（GitHub 硬限制，超限会**拒绝注册整个 workflow**，表现为 run 里 0 job）。
+两种：`workflow_dispatch`（手动，可选 hook 后端/严格 kCFI/发布开关）与 **push 到 `main`**（会自动跑一次默认配置）。
+> 之所以保留 push 触发：本机 fine-grained PAT 没有 `Actions: write`，无法用 API 触发 dispatch；
+> push 触发时 `inputs` 为空，workflow 用 `inputs.x || '默认值'` 兜底。
+
+`workflow_dispatch.inputs` 上限 10 个（GitHub 硬限制）。`workflow_dispatch.inputs` 上限 10 个（GitHub 硬限制，超限会**拒绝注册整个 workflow**，表现为 run 里 0 job）。
 
 ```powershell
 $h=@{'Accept'='application/vnd.github+json';'User-Agent'='dsh';'Authorization'="Bearer <PAT>"}

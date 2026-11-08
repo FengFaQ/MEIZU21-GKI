@@ -80,15 +80,28 @@ import sys
 
 NA_TOKENS = ("-", "n/a", "na", "none", "?", "null")
 
-# movz / movk on w17, with an optional lsl shift
+# llvm-objdump line shapes we must tolerate:
+#   ffffffc0082d3a00: 52 00 00 90     movz w17, #0x5ddc    <- with raw bytes (default)
+#   ffffffc0082d3a00:                 movz w17, #0x5ddc    <- --no-show-raw-insn
+#   1000: 72000000  movk w17, #0xc73d, lsl #16             <- some builds print one u32
+# Rather than trying to match "address + optional encoding + mnemonic" in one
+# expression (the encoding width varies between llvm versions), strip the prefix
+# in two steps and then match the mnemonic at the start of what remains.
+ADDR_PREFIX_RE = re.compile(r"^\s*[0-9a-fA-F]+:\s*")
+RAWBYTES_RE = re.compile(r"^(?:[0-9a-fA-F]{2}\s+)+")
 INSN_RE = re.compile(
-    r"^\s*[0-9a-fA-F]+:\s+"                       # address
-    r"(?:[0-9a-fA-F]{8}\s+)?"                     # optional raw encoding
-    r"(?P<op>mov[zk])\s+w17\s*,\s*#(?P<imm>0x[0-9a-fA-F]+|\d+)"
+    r"^(?P<op>mov[zk])\s+w17\s*,\s*#(?P<imm>0x[0-9a-fA-F]+|\d+)"
     r"(?:\s*,\s*lsl\s*#(?P<lsl>\d+))?",
     re.IGNORECASE,
 )
-BRK_RE = re.compile(r"^\s*[0-9a-fA-F]+:\s+(?:[0-9a-fA-F]{8}\s+)?brk\s+#", re.IGNORECASE)
+BRK_RE = re.compile(r"^brk\s+#", re.IGNORECASE)
+
+
+def normalise_asm_line(line):
+    """Return the mnemonic-and-operands part of an objdump line, prefix stripped."""
+    s = ADDR_PREFIX_RE.sub("", line)
+    s = RAWBYTES_RE.sub("", s)
+    return s.strip()
 
 
 class GateError(Exception):
@@ -200,9 +213,12 @@ def rebuild_w17_immediate(asm):
     nbits = 0
     started = False
     for line in asm.splitlines():
-        if started and BRK_RE.match(line):
+        s = normalise_asm_line(line)
+        if not s:
+            continue
+        if started and BRK_RE.match(s):
             break
-        m = INSN_RE.match(line)
+        m = INSN_RE.match(s)
         if not m:
             continue
         op = m.group("op").lower()
