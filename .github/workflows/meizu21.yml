@@ -37,7 +37,9 @@ on:
   # 说明：本 token 没有 Actions:write，无法用 API dispatch；push 到 main 也会触发。
   # push 触发时 inputs 为空，下面 job 级 env 用 `|| '默认值'` 兜底。
   push:
-    branches: [main]
+    # feat/auto-follow-upstream-susfs 是临时加上去的，用于在本分支上验证新架构；
+    # 合并回 main 后应删除该分支条目。
+    branches: [main, feat/auto-follow-upstream-susfs]
     # 只刷缓存不算构建：避免改 cache-trigger.txt 时白跑一次 40 分钟的内核编译
     paths-ignore:
       - 'cache-trigger.txt'
