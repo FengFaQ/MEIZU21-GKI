@@ -10,17 +10,24 @@
 用 **GKI android14-6.1（6.1.25 / os_patch 2023-10）+ 21 Pro 参考树的兼容层补丁 + FinaSU v1.5.0 内建**，
 在 GitHub Actions 里编出魅族 21（M2461）的 `Image`，再重打包成带 AVB 的 96 MiB `boot.img`（只替换 boot 分区）。
 
-## 1. 当前状态（2026-11-08 更新：run#11 全绿）
+## 1. 当前状态（2026-11-13 更新：run#13 全绿，FinaSU v1.6.1）
 
 | 项 | 状态 |
 |---|---|
 | 设备事实（config / KMI / kCFI / AVB 骨架 / boot 头） | ✅ 齐全（`device/meizu21/`） |
 | CI 完整流水线 | ✅ **run#11 全绿**（缓存 → 编译 → 三门禁 → v1/v2 重打包 → release + dist） |
-| release 产物 | ✅ `meizu21-11`（boot.img / boot-v2digest.img / Image / APK / 日志） |
+| release 产物 | ✅ **`meizu21-13`**（FinaSU v1.6.1）：boot.img / boot-v2digest.img / Image / APK / 日志 |
 | dist 分支 | ✅ 已建立（本机取产物唯一通道） |
 | 真机刷入验证 | ❌ 未做（下一步，只刷非活动槽） |
 
-### run#11 产物（已在本机独立复核）
+### run#13 产物（FinaSU v1.6.1，2026-11-13，已本机复核）
+
+`Image` 34,892,288 B、sha256 `dfcf8449af6189f05b92fcf8f134360c309c61c2f813278be0288c9f1892c13f`；
+管理器 APK `FinaSU_v1.6.1_33198-release.apk`（28,674,148 B，sha256 `b35a675c…`）；
+`CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y` 已由 olddefconfig 自动打开；门禁 1/2/3 全过
+（kCFI 21 MATCH + 3 N/A）。取回：`tools/fetch_dist.ps1`（dist 分支 run 13）。
+
+### run#11 产物（历史，FinaSU v1.5.0）
 
 | 文件 | 大小 | sha256 |
 |---|---|---|

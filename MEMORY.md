@@ -129,6 +129,13 @@
 | 21 | FinaSU 升到 v1.6.1 后，若补丁版本旧可能编译期报 `undefined symbol: susfs_parse_priority_app_strings` | 新版 Kconfig 新增 `KSU_SUSFS_PRIORITY_UID_FILTER`(default y)，`extension/susfs.c` 直接调用该内核函数 | 本项目补丁已提供全局符号 → 兼容；已加 `check_finasu_compat.sh` 显式检查，避免下次上游再改时盲炸 |
 | 22 | `KSU_SUSFS_HAS_TYPE_REGISTRATION` 相关特性静默不生效 | FinaSU Kbuild 用 `grep susfs_add_sus_type fs/susfs.c` 探测（SUSFS v2.4.0 才有）；参考树补丁没有 → 相关调用点被编译掉 | 这是**安全降级**（不是错误）。若将来想启用，需把 susfs4ksu 升到 ≥2.4.0 并重新生成补丁 |
 
+## 7.1 FinaSU 跟踪结果（2026-11-13）
+
+- 上游 v1.6.1（`14a71d9`）在本流水线上 **run#13 全绿**：编译成功、三门禁全过、v1/v2 重打包成功。
+- 兼容预检输出（step 8.5）实证：`check_susfs_inline.sh` 通过、`susfs_parse_priority_app_strings` 存在、
+  `CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y` 自动打开；`susfs_add_sus_type` 探测未命中属安全降级。
+- 结论：**`finasu_ref=latest` 可以长期保持**，靠两道预检兜底；真要复现某次产物就填具体 tag。
+
 ## 8. 硬约束（用户 2026-11-08 明确要求）
 
 **禁止在本地（WSL/Windows）编译内核 Image。** 理由：WSL 实际可用磁盘只有 **100 GB**（`df` 显示的
