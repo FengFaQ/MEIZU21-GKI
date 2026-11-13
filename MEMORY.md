@@ -136,6 +136,39 @@
   `CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y` 自动打开；`susfs_add_sus_type` 探测未命中属安全降级。
 - 结论：**`finasu_ref=latest` 可以长期保持**，靠两道预检兜底；真要复现某次产物就填具体 tag。
 
+## 7.2 SUSFS 2.4.0 升级的坑（2026-11-13，两个独立项目交叉验证）
+
+### 坑 23：上游 2.4.0 patch 引用 `VMA_PAD_START(vma)`，标准 ACK 内核没有这个宏
+
+- 事实核实：`VMA_PAD_START` 在 **r17 / ACK 6.6 / mainline 6.12–6.15 全部不存在**，
+  只有带 VM_PAD 回移的厂商树才有；上游 susfs 2.4.0 的 `fs/proc/task_mmu.c` hunk 直接引用它
+  → 标准 6.1 上必然 `-Wimplicit-function-declaration` 中断。
+- 语义：这行是 `show_map_vma()` 的 `end`，等价写法就是 `vma->vm_end`（2.3.0 版本来就这么写）。
+- **两个独立实现给出完全相同的修法**（都做了条件判断，只在目标内核没有该宏时才改）：
+  - `muling0721/GKI_FinaSU` `scripts/susfs_fixes/apply.sh` L96
+  - `xuyi726/ak3_XHigh` `scripts/susfs_fixes/apply.sh` L57，注释直接点名
+    「兼容缺少 VMA padding 接口的 … **6.1.25～68**」（我们的 6.1.25 在范围内）
+  ```bash
+  if grep -qF 'VMA_PAD_START(vma)' "$SUSFS_PATCH" && ! grep -Rqs 'VMA_PAD_START' ./include/linux; then
+    sed -i 's/VMA_PAD_START(vma)/vma->vm_end/g' "$SUSFS_PATCH"
+  fi
+  ```
+
+### 坑 24：`fs/namespace.c` 的 `#include <trace/hooks/blk.h>` 是 2.4.0 hunk 的**上下文行**
+
+ak3_XHigh 的注释记下了这个反直觉点：早期做法是「r17 没有这行 → 删掉它让 hunk 好打」，
+但 **2026-10-19 起的 SUSFS 补丁把这行当上下文行（要求它存在）**，照旧删会让 hunk 失配产生 `.rej`。
+我们这次的处理是保留该 include 并手工把 hunk 补进 `fs/namespace.c`（r17 原本没有这行，
+所以 `git apply` 对该文件 Hunk #1 失败，其余 64 个 hunk 全部命中）。
+
+### 架构差异（值得后续采纳）
+
+这两个项目都**不维护手工大补丁**，而是构建时：拉上游 patch → `apply.sh` 按
+`ANDROID_VERSION`/`KERNEL_VERSION`/`CURRENT_SUB` 逐项修上下文 → `patch -p1` → 处理预期 `.rej`。
+好处是上游一更新就能跟；代价是脚本复杂（ak3 版 45 KB、muling 版 39 KB）。
+我们把 2.4.0 一次性融进了固定补丁（53 文件），改动用三方合并 + 逐文件校验控制。两条路都可行，
+但**如果以后还要频繁跟 SUSFS 上游，建议改成脚本化修上下文**。
+
 ## 8. 硬约束（用户 2026-11-08 明确要求）
 
 **禁止在本地（WSL/Windows）编译内核 Image。** 理由：WSL 实际可用磁盘只有 **100 GB**（`df` 显示的

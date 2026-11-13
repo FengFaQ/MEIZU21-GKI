@@ -1,0 +1,22 @@
+diff --git a/fs/proc/bootconfig.c b/fs/proc/bootconfig.c
+index ca76c06d0..ac437d18c 100644
+--- a/fs/proc/bootconfig.c
++++ b/fs/proc/bootconfig.c
+@@ -59,10 +59,16 @@ static int __init copy_xbc_key_value_list(char *dst, size_t size)
+ 		vnode = xbc_node_get_child(leaf);
+ 		if (vnode) {
+ 			xbc_array_for_each_value(vnode, val) {
+-				if (strchr(val, '"'))
++				const char *out_val = val;
++				if (!strcmp(key, "androidboot.verifiedbootstate"))
++					out_val = "green";
++				else if (!strcmp(key, "androidboot.vbmeta.device_state"))
++					out_val = "locked";
++				if (strchr(out_val, '"'))
+ 					q = '\'';
+ 				else
+ 					q = '"';
++				val = out_val;
+ 				ret = snprintf(dst, rest(dst, end), "%c%s%c%s",
+ 					q, val, q, xbc_node_is_array(vnode) ? ", " : "\n");
+ 				if (ret < 0)

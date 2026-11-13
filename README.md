@@ -36,6 +36,38 @@ AOSP kernel/common @ 0d8921531  (android14-6.1-2023-10_r17)
 
 ---
 
+
+---
+
+## SUSFS 自动跟随上游（新架构）
+
+**问题**：以前把 SUSFS 融进一个大补丁（53 文件），上游一升级就得手工三方合并，且容易漏掉
+「新版本改了实现」的地方（例如 2.4.0 把 `fs/stat.c` 的 `DEFAULT_KSU_MNT_ID` 判断换成了
+`real_mount()->mnt_id`，旧断言会误判成 hunk 丢失）。
+
+**现在**：拆成「固定魅族层 + 动态 SUSFS」。
+
+```
+patches/01-meizu-layer.patch        26 文件，魅族兼容层（vendor hooks / KMI 导出 /
+                                    kCFI 对齐 / 反检测 / setlocalversion），零 SUSFS 内容
+scripts/fetch_susfs.sh              构建时拉上游 susfs4ksu → 按内核版本修上下文
+                                    （VMA_PAD_START、base.c/namespace.c 的 include 锚点）
+                                    → 产出 susfs.patch + 三源文件 + susfs-meta.env
+scripts/apply_susfs.sh              应用 + 严格校验（无 .rej + 逐文件「指纹行」断言）
+patches/03-meizu-susfs-overlay.patch 魅族对 SUSFS 代码的定制（verifiedbootstate 伪装）
+patches/archive/00-old-combined-53files.patch  旧合并补丁（仅存档，CI 不再使用）
+```
+
+关键设计：
+
+- **断言从补丁动态提取**，不手写在脚本里。手写断言会随上游版本过时——本项目已踩过
+  这个坑（拿 2.3.0 才有的 `DEFAULT_KSU_MNT_ID` 断言 2.4.0，误判「hunk 丢失」）。
+- **`patch -p1` 的返回值不可信**：上下文不符时会静默跳过 hunk（有时连 `.rej` 都不写），
+  表现为「应用成功但功能静默失效」。所以必须做逐文件指纹断言。
+- **修复项带条件判断**：只在目标内核真的缺对应设施时才改（如 `VMA_PAD_START` 需
+  `! grep -Rqs VMA_PAD_START ./include/linux`），已在本内核验证的行为不会被误改。
+- 版本/提交/修复记录写进 `susfs-meta.env`，随产物发布，便于回溯。
+
 ## 编译加速：三层缓存（Actions 缓存 > 仓库 `cache` 分支 > Google 直连）
 
 | 层 | 内容 | 实测/预期耗时 | 用途 |

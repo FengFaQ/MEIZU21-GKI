@@ -209,46 +209,62 @@ jobs:
             common
           key: meizu21-upstream-${{ env.GKI_SHA }}-${{ env.CLANG_ID }}-v2
 
-      - name: 6. 打补丁 + 放入 SUSFS 内核实现
+      - name: 6. 打补丁（魅族层固定 + SUSFS 自动跟随上游）
         run: |
           set -euo pipefail
           cd common
           git init -q . && git config user.email dsh@local && git config user.name dsh
-          git apply --check ../patches/01-kernel-common.patch
-          git apply ../patches/01-kernel-common.patch
-          cp ../kernel-add/fs/susfs.c fs/susfs.c
-          cp ../kernel-add/include/linux/susfs.h ../kernel-add/include/linux/susfs_def.h include/linux/
-          # 01 补丁把 IKCONFIG 的内容指向 arch/arm64/configs/m2461_stock.config（/proc/config.gz 伪装）
+
+          echo "=== [1/4] 魅族兼容层（固定补丁，26 文件，不含 SUSFS）==="
+          git apply --check ../patches/01-meizu-layer.patch
+          git apply ../patches/01-meizu-layer.patch
+          echo "OK 魅族层已应用"
+
+          echo "=== [2/4] 拉上游 SUSFS + 按内核版本修上下文（自动跟随）==="
+          # 输出到 $GITHUB_WORKSPACE/susfs，含 susfs.patch / 三源文件 / susfs-meta.env
+          KERNEL_SRC="$PWD" bash ../scripts/fetch_susfs.sh "$GITHUB_WORKSPACE/susfs"
+          cat "$GITHUB_WORKSPACE/susfs/susfs-meta.env" | tee ../susfs-meta.env
+
+          echo "=== [3/4] 应用 SUSFS（严格校验每个 hunk 是否落位）==="
+          bash ../scripts/apply_susfs.sh "$GITHUB_WORKSPACE/susfs" "$PWD"
+
+          echo "=== [4/4] 魅族 SUSFS overlay（verifiedbootstate 伪装等）==="
+          git apply ../patches/03-meizu-susfs-overlay.patch
+          echo "OK overlay 已应用"
+
+          # IKCONFIG 伪装内容（01 补丁指向 m2461_stock.config）
           cp ../device/meizu21/stock_kernel.config arch/arm64/configs/m2461_stock.config
-          echo "=== 补丁后自检 ==="
-          grep -q 'ksu_handle_execveat' fs/exec.c && echo "OK fs/exec.c"
-          # 2.4.0 自检：版本串 + 注册表入口 + services.c hook + 魅族层
-          grep -q 'define SUSFS_VERSION "v2.4.0"' include/linux/susfs.h \
-            || { echo "FAIL: kernel-add 的 susfs.h 不是 v2.4.0"; exit 1; }
+
+          echo "=== 综合自检 ==="
+          # SUSFS 版本与 2.4.0 注册表
+          grep -q 'define SUSFS_VERSION' include/linux/susfs.h || { echo "FAIL: 缺 SUSFS_VERSION"; exit 1; }
+          SUSFS_VER="$(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' include/linux/susfs.h | head -1)"
+          echo "SUSFS_VERSION=$SUSFS_VER"
+          case "$SUSFS_VER" in
+            v2.*) echo "OK 版本形态" ;;
+            *) echo "FAIL: SUSFS 版本异常 ($SUSFS_VER)"; exit 1 ;;
+          esac
           grep -q 'susfs_add_sus_type' fs/susfs.c \
-            || { echo "FAIL: 2.4.0 注册表入口 susfs_add_sus_type 缺失"; exit 1; }
-          grep -q 'susfs_add_sus_avd_allowed_by_type' fs/susfs.c \
-            || { echo "FAIL: 2.4.0 注册表入口 susfs_add_sus_avd_allowed_by_type 缺失"; exit 1; }
+            || { echo "FAIL: 2.4.0 注册表 susfs_add_sus_type 缺失"; exit 1; }
           grep -q 'SUS_TYPE_HLIST' fs/susfs.c \
             || { echo "FAIL: 2.4.0 SUS_TYPE_HLIST 缺失"; exit 1; }
           grep -q 'susfs_is_sus_type_rcu' security/selinux/ss/services.c \
-            || { echo "FAIL: services.c 没被 01 补丁注入 2.4.0 hook"; exit 1; }
-          grep -q 'susfs_is_current_ksu_domain' security/selinux/status.c \
-            || { echo "FAIL: status.c 没被 01 补丁注入 2.4.0 hook"; exit 1; }
-          echo "OK 2.4.0 注册表 + services.c/status.c hook"
+            || { echo "FAIL: services.c 缺 2.4.0 hook"; exit 1; }
 
-          # 魅族自定义层必须仍在（防合并时被上游覆盖）
+          # 魅族定制层必须仍在
           grep -q 'wait_spam_info' drivers/android/binder.c \
-            || { echo "FAIL: 魅族 KMI 导出 wait_spam_info 丢了"; exit 1; }
+            || { echo "FAIL: 魅族 KMI wait_spam_info 丢了"; exit 1; }
           grep -q 'pm_system_irq_wakeup' drivers/base/power/wakeup.c \
-            || { echo "FAIL: 魅族 KMI 导出 pm_system_irq_wakeup 丢了"; exit 1; }
+            || { echo "FAIL: 魅族 KMI pm_system_irq_wakeup 丢了"; exit 1; }
           grep -q 'shrink_slab_kcfi_ref' mm/vmscan.c \
-            || { echo "FAIL: kCFI 对齐 shrink_slab_kcfi_ref 丢了"; exit 1; }
+            || { echo "FAIL: kCFI 对齐丢了"; exit 1; }
+          grep -q 'androidboot.verifiedbootstate' fs/proc/bootconfig.c \
+            || { echo "FAIL: 魅族 bootconfig 伪装丢了"; exit 1; }
           grep -q 'm2461_stock.config' kernel/Makefile \
-            || { echo "FAIL: IKCONFIG 伪装路径不是 m2461"; exit 1; }
-          echo "OK 魅族层（KMI 导出 / kCFI / IKCONFIG）完好"
-          grep -q 'm2461_stock.config' kernel/Makefile && echo "OK config_data 指向 m2461"
-          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig && echo "OK KSU Kconfig 已挂"
+            || { echo "FAIL: IKCONFIG 路径不是 m2461"; exit 1; }
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig \
+            || { echo "FAIL: KSU Kconfig 未挂"; exit 1; }
+          echo "OK 魅族层完好（KMI / kCFI / bootconfig / IKCONFIG / KSU）"
 
       - name: 7. 获取并集成 FinaSU（每次构建实时拉取，故意不进缓存）
         env:
@@ -561,6 +577,7 @@ jobs:
           cp gate2_kmi.log out/ 2>/dev/null || true
           cp gate3_kcfi.log out/ 2>/dev/null || true
           cp finasu_compat.txt out/ 2>/dev/null || true
+          cp susfs-meta.env out/ 2>/dev/null || true
           {
             echo "device=meizu21"
             echo "run=${{ github.run_number }}"
