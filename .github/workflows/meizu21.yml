@@ -222,11 +222,31 @@ jobs:
           cp ../device/meizu21/stock_kernel.config arch/arm64/configs/m2461_stock.config
           echo "=== 补丁后自检 ==="
           grep -q 'ksu_handle_execveat' fs/exec.c && echo "OK fs/exec.c"
-          grep -q 'susfs_is_data_local_tmp_dir' include/linux/susfs_def.h \
-            || { echo "FAIL: include/linux/susfs_def.h 不是参考树版本（缺 susfs_is_data_local_tmp_dir）"; exit 1; }
-          grep -q 'susfs_is_data_local_tmp_dir' fs/stat.c \
-            || { echo "FAIL: 01 补丁没打全（fs/stat.c 缺调用）"; exit 1; }
-          echo "OK susfs_def.h + fs/stat.c"
+          # 2.4.0 自检：版本串 + 注册表入口 + services.c hook + 魅族层
+          grep -q 'define SUSFS_VERSION "v2.4.0"' include/linux/susfs.h \
+            || { echo "FAIL: kernel-add 的 susfs.h 不是 v2.4.0"; exit 1; }
+          grep -q 'susfs_add_sus_type' fs/susfs.c \
+            || { echo "FAIL: 2.4.0 注册表入口 susfs_add_sus_type 缺失"; exit 1; }
+          grep -q 'susfs_add_sus_avd_allowed_by_type' fs/susfs.c \
+            || { echo "FAIL: 2.4.0 注册表入口 susfs_add_sus_avd_allowed_by_type 缺失"; exit 1; }
+          grep -q 'SUS_TYPE_HLIST' fs/susfs.c \
+            || { echo "FAIL: 2.4.0 SUS_TYPE_HLIST 缺失"; exit 1; }
+          grep -q 'susfs_is_sus_type_rcu' security/selinux/ss/services.c \
+            || { echo "FAIL: services.c 没被 01 补丁注入 2.4.0 hook"; exit 1; }
+          grep -q 'susfs_is_current_ksu_domain' security/selinux/status.c \
+            || { echo "FAIL: status.c 没被 01 补丁注入 2.4.0 hook"; exit 1; }
+          echo "OK 2.4.0 注册表 + services.c/status.c hook"
+
+          # 魅族自定义层必须仍在（防合并时被上游覆盖）
+          grep -q 'wait_spam_info' drivers/android/binder.c \
+            || { echo "FAIL: 魅族 KMI 导出 wait_spam_info 丢了"; exit 1; }
+          grep -q 'pm_system_irq_wakeup' drivers/base/power/wakeup.c \
+            || { echo "FAIL: 魅族 KMI 导出 pm_system_irq_wakeup 丢了"; exit 1; }
+          grep -q 'shrink_slab_kcfi_ref' mm/vmscan.c \
+            || { echo "FAIL: kCFI 对齐 shrink_slab_kcfi_ref 丢了"; exit 1; }
+          grep -q 'm2461_stock.config' kernel/Makefile \
+            || { echo "FAIL: IKCONFIG 伪装路径不是 m2461"; exit 1; }
+          echo "OK 魅族层（KMI 导出 / kCFI / IKCONFIG）完好"
           grep -q 'm2461_stock.config' kernel/Makefile && echo "OK config_data 指向 m2461"
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig && echo "OK KSU Kconfig 已挂"
 
