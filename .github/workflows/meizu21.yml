@@ -100,7 +100,15 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev lz4 zstd cpio rsync \
-                 dwarves kmod file xz-utils
+                 dwarves kmod file xz-utils python3-cryptography openssl
+          # avbtool：AOSP 官方 AVB 工具（用于给 boot.img 加/验 hash footer）
+          if ! command -v avbtool >/dev/null 2>&1; then
+            sudo curl -sSL --retry 3 -o /usr/local/bin/avbtool \
+              https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool?format=TEXT \
+              && sudo bash -c 'base64 -d /usr/local/bin/avbtool > /tmp/a && mv /tmp/a /usr/local/bin/avbtool' \
+              && sudo chmod +x /usr/local/bin/avbtool || echo "WARN: avbtool 下载失败"
+          fi
+          avbtool version 2>/dev/null || python3 /usr/local/bin/avbtool version 2>/dev/null || echo "WARN: avbtool 不可执行（脚本会退到 python 模块方式）"
           which pahole && pahole --version || echo "WARN: pahole 缺失（CONFIG_DEBUG_INFO_BTF=y 会炸）"
           which dtc || true
 
@@ -527,29 +535,45 @@ jobs:
             echo "WARN 门禁 3/3 未全绿（strict_kcfi=false，继续；首刷后用 dmesg 回填期望值）"
           fi
 
-      - name: 15. 重打包 boot.img（零填充结构，不含 AVB）
+      - name: 15. 重打包 boot.img（自有密钥重签 AVB，分区内自洽）
         run: |
           set -euo pipefail
           mkdir -p out
-          # 为什么不再克隆原厂 AVB：
-          #   魅族 21 原厂 vbmeta 是 RSA-4096 签名的，签名覆盖 hash descriptor；
-          #   换 kernel 后 descriptor 必然 stale，而我没有魅族私钥无法重签。
-          #   实测 run#17（保留 stale 签名）在真机上「亮 logo 数秒后自动重启」。
-          #   能开机的参考实现（MEIZU21GKI）走「不签名 + 零填充到分区大小」，
-          #   自检断言尾部全 0。故改用零填充方案。
+          # 为什么必须重签而不是沿用原厂 vbmeta：
+          #   原厂 vbmeta 是 RSA-4096 签名的，签名覆盖 hash descriptor；
+          #   换 kernel 后 descriptor 必然不符，且没有魅族私钥 → 原签名失效
+          #   → 真机「亮 logo 数秒后自动重启」（run#17 实测）。
+          #   AVB 模型是「vbmeta 自带公钥、用对应私钥验自己」，所以用自有密钥
+          #   重签后 boot 分区自洽可校验，不需要原厂私钥、也不需要动 vbmeta 分区。
           test -f "$DEVICE_DIR/boot_header_4096.bin" \
-            || { echo "缺少原厂 boot 头模板 $DEVICE_DIR/boot_header_4096.bin"; exit 1; }
-          ls -la "$DEVICE_DIR/boot_header_4096.bin"
+            || { echo "缺少原厂 boot 头模板"; exit 1; }
+
+          # --- 取 AVB 签名私钥 ---
+          # 优先 Secret（公开仓库不能存私钥）；缺失则本轮生成一把临时的，
+          # 但会明确警告：临时密钥下次构建就变，不能跨版本复用。
+          if [ -n "${AVB_SIGN_KEY_PEM:-}" ]; then
+            printf '%s\n' "$AVB_SIGN_KEY_PEM" > "$RUNNER_TEMP/avb_sign.pem"
+            echo "[avb] 使用仓库 Secret AVB_SIGN_KEY_PEM"
+            KEY_MODE=secret
+          else
+            echo "::warning::未配置 AVB_SIGN_KEY_PEM，本轮生成临时 RSA-4096 密钥（不可跨构建复用）"
+            openssl genrsa -out "$RUNNER_TEMP/avb_sign.pem" 4096
+            KEY_MODE=ephemeral
+          fi
+          openssl rsa -in "$RUNNER_TEMP/avb_sign.pem" -noout -text 2>/dev/null | head -1
+          echo "AVB_KEY_MODE=$KEY_MODE" >> "$GITHUB_ENV"
+
           img_size="$(stat -c%s common/arch/arm64/boot/Image)"
           echo "Image size=$img_size"
           test "$img_size" -lt 94371840 || { echo "Image 太大（>90 MiB）"; exit 1; }
 
-          python3 scripts/make_boot_zeroavb.py \
+          python3 scripts/avb_sign_boot.py \
             common/arch/arm64/boot/Image out/boot.img \
+            --key "$RUNNER_TEMP/avb_sign.pem" \
             --header-template "$DEVICE_DIR/boot_header_4096.bin" \
             | tee out/boot_avb_report.txt
 
-          # 原厂 boot 头逐字节校验（防止模板被换过）
+          # 原厂头模板 + 机型校验
           python3 - "$DEVICE_DIR" <<'PY' | tee out/boot_header_check.txt
           import hashlib, pathlib, sys
           dev = pathlib.Path(sys.argv[1])
@@ -560,23 +584,10 @@ jobs:
                   continue
               k, v = line.split("=", 1)
               src[k.strip()] = v.strip()
-          want = src.get("boot_sha256", "")
           print(f"[header] template sha256={hashlib.sha256(tpl).hexdigest()[:16]}")
-          print(f"[header] from stock boot sha256={want[:16]}…")
-          assert len(tpl) == 4096, "头模板不是 4096 字节"
-          assert tpl[:8] == b"ANDROID!", "头模板 magic 不对"
+          assert len(tpl) == 4096 and tpl[:8] == b"ANDROID!", "头模板不对"
           assert src.get("device") == "meizu21", "source.txt 不是 meizu21"
           print("[header] OK（原厂头模板，机型已确认）")
-          PY
-
-          # 关键：确认产物里没有 AVB 残留（否则 ABL 会因 stale 签名拒绝启动）
-          python3 - out/boot.img <<'PY'
-          import sys
-          data = open(sys.argv[1], 'rb').read()
-          assert len(data) == 100663296, f"大小不是 96 MiB: {len(data)}"
-          assert b'AVB0' not in data, "产物里仍有 AVB0（stale 签名会导致开机重启）"
-          assert data[-64:-60] != b'AVBf', "产物尾部仍有 AVBf footer"
-          print("[OK] 无 AVB 残留，大小 96 MiB")
           PY
 
           ls -la out/
