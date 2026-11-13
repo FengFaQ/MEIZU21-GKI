@@ -126,6 +126,9 @@
 4. `CONFIG_MZ_*`（原厂私有 Kconfig）被 olddefconfig 丢弃后，21 厂商模块行为是否异常。
 5. 自编内核与原厂的 `shrink_slab` / `mem_cgroup_id_*` kCFI 前导是否完全一致（门禁 3 会验）。
 
+| 21 | FinaSU 升到 v1.6.1 后，若补丁版本旧可能编译期报 `undefined symbol: susfs_parse_priority_app_strings` | 新版 Kconfig 新增 `KSU_SUSFS_PRIORITY_UID_FILTER`(default y)，`extension/susfs.c` 直接调用该内核函数 | 本项目补丁已提供全局符号 → 兼容；已加 `check_finasu_compat.sh` 显式检查，避免下次上游再改时盲炸 |
+| 22 | `KSU_SUSFS_HAS_TYPE_REGISTRATION` 相关特性静默不生效 | FinaSU Kbuild 用 `grep susfs_add_sus_type fs/susfs.c` 探测（SUSFS v2.4.0 才有）；参考树补丁没有 → 相关调用点被编译掉 | 这是**安全降级**（不是错误）。若将来想启用，需把 susfs4ksu 升到 ≥2.4.0 并重新生成补丁 |
+
 ## 8. 硬约束（用户 2026-11-08 明确要求）
 
 **禁止在本地（WSL/Windows）编译内核 Image。** 理由：WSL 实际可用磁盘只有 **100 GB**（`df` 显示的

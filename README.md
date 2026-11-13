@@ -48,6 +48,24 @@ AOSP kernel/common @ 0d8921531  (android14-6.1-2023-10_r17)
 - `meizu21.yml` 的 step 2.5/3/5/5.5 实现三层回退：Actions 缓存命中就直接用；否则仓库 cache 分支；再否则 Google 直连；首次填充 Actions 缓存。
 - 注意：**仓库 cache 分支本身不省时间**（实测 git fetch+archive 950 MB 比 Google 直连还慢，run#6：clang 229 s + GKI 278 s vs run#3：214 s + 132 s），它的价值是「持久、可移植、不怕 Google 抽风」；真正的提速来自 Actions 缓存。
 - **FinaSU 不进任何缓存**：每次构建实时解析最新 release（源码/APK/证书动态），dispatch 可用 `finasu_ref` 固定版本。
+
+### FinaSU 版本与内核补丁的匹配（重要）
+
+FinaSU 用的是 `finasu_ref=latest`（每次取最新），而内核侧 SUSFS 补丁是我们固定的。上游一旦新增
+「要求内核提供某符号」的代码，就可能把树打断在编译期深处。所以流水线里有两道显式检查：
+
+- **step 7 兼容预检**（`scripts/check_finasu_compat.sh`）：SUSFS Inline 入口自检 + 内核侧符号提供者检查；
+- **step 8.5 再检一次**：带上 `.config`，验证 `CONFIG_KSU_*` 硬要求、新版 Kconfig 选项是否被 olddefconfig 打开。
+
+任一 **FAIL** 会直接中止并提示两条出路：① 把 `patches/`+`kernel-add/` 的 SUSFS 升到匹配版本；
+② dispatch 时用 `finasu_ref` 固定到上一个可用版本。
+
+已实测的版本对照（2026-11-13）：
+
+| FinaSU | 内核侧变化 | 与我们的补丁 |
+|---|---|---|
+| v1.5.0 | — | ✅ 12 MATCH 编译通过 |
+| **v1.6.1** | 新增 `KSU_SUSFS_PRIORITY_UID_FILTER`（调用 `susfs_parse_priority_app_strings()`）、`KSU_SUSFS_HAS_TYPE_REGISTRATION` 探测（SUSFS v2.4.0 才有）、preinit runner 改 `-z max-page-size=0x10000` | ✅ 兼容：前者我们补丁已提供全局符号；后两者探测不到自动编译掉（安全降级） |
 - 刷新缓存：改 `cache-trigger.txt` 并 push（该路径在 build workflow 的 `paths-ignore` 里，不会白跑编译）。
 
 ## 刷入（只刷非活动槽）

@@ -30,7 +30,7 @@ on:
         type: choice
         options: ['true', 'false']
       finasu_ref:
-        description: 'FinaSU 版本：latest=每次取最新 release（推荐）；也可填 tag（如 v1.5.0）'
+        description: 'FinaSU 版本：latest=每次取最新 release（推荐）；也可填 tag（如 v1.6.1 / v1.5.0）'
         required: false
         default: latest
         type: string
@@ -271,9 +271,10 @@ jobs:
           cd common
           ../FinaSU/kernel/setup.sh --dir "$PWD/../FinaSU"
           test -e drivers/kernelsu/Kbuild || { echo "drivers/kernelsu 没接上"; exit 1; }
-          echo "=== FinaSU SUSFS-Inline 入口自检 ==="
-          sh ../FinaSU/kernel/tools/check_susfs_inline.sh "$PWD"
-          echo "[finasu] 提示：若新版改了 inline hook API，会在这里或编译期失败；可用 finasu_ref=v1.5.0 固定版本"
+          echo "=== FinaSU ⇄ 内核补丁 兼容预检 ==="
+          # 注意：这里 .config 还没生成，配置类检查会在 step 8.5 再跑一遍
+          bash ../scripts/check_finasu_compat.sh "$PWD/../FinaSU" "$PWD"
+          echo "[finasu] 提示：上游若改动 inline hook API，会在预检或编译期失败；可用 finasu_ref 固定版本"
 
       - name: 8. 生成 .config（原厂 config + FinaSU 开关 + olddefconfig）
         run: |
@@ -314,6 +315,16 @@ jobs:
             need CONFIG_KSU_HOOK_TRACEPOINT
           fi
           echo "配置 OK"
+
+      - name: 8.5 FinaSU 兼容预检（带 .config 的完整版）
+        run: |
+          set -euo pipefail
+          cd common
+          bash ../scripts/check_finasu_compat.sh "$PWD/../FinaSU" "$PWD"
+          {
+            echo "finasu_ref=${FINASU_REF}"
+            echo "finasu_commit=${FINASU_COMMIT}"
+          } > ../finasu_compat.txt
 
       - name: 9. 下载管理器 APK 并动态提取证书（与本次 FinaSU 版本严格对应）
         env:
@@ -529,6 +540,7 @@ jobs:
           cp gate1_version.txt out/ 2>/dev/null || true
           cp gate2_kmi.log out/ 2>/dev/null || true
           cp gate3_kcfi.log out/ 2>/dev/null || true
+          cp finasu_compat.txt out/ 2>/dev/null || true
           {
             echo "device=meizu21"
             echo "run=${{ github.run_number }}"

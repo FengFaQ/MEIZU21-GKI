@@ -142,6 +142,29 @@ Invoke-RestMethod "https://api.github.com/repos/FengFaQ/MEIZU21-GKI/actions/work
 | 仓库 cache 分支 | 229 s | 278 s | 507 s（更慢） |
 | **Actions 缓存命中** | — | — | **~30–60 s**（run#10 实测步骤 2.5→6 共约 2 分钟） |
 
+## 6.2 FinaSU 升级同步（2026-11-13）
+
+上游 `LyraVoid/FinaSU` 已从 v1.5.0 走到 **v1.6.1**（`14a71d953a09e0d706426a17be0f4b422893ab26`，
+2026-11-12 发布，中间还有 v1.5.1/v1.5.2/v1.6.0）。因为流水线是 `finasu_ref=latest`（每次现取），
+**不需要改任何 pin 就能跟上**；本次做的是「确认兼容 + 把它变成显式检查」。
+
+### 版本对照实测
+
+| 项 | v1.5.0 | v1.6.1 | 影响 |
+|---|---|---|---|
+| `kernel/tools/check_susfs_inline.sh` | — | **逐字节相同** | 12 个 inline 入口要求不变 |
+| APK 证书 | `0x02cc / 2d89b50a…` | **完全相同** | `KSU_EXPECTED_SIZE/HASH` 无需改（且本来就是动态提取） |
+| `kernel/extension/susfs.c` | — | +5 行：新增 `CMD_SUSFS_SET_PRIORITY_UID_FILTER` 分支 | 需内核 `susfs_set_priority_uid_filter()` ✅ 有 |
+| `kernel/Kconfig` | — | +11 行 `KSU_SUSFS_PRIORITY_UID_FILTER`（default y） | 需内核 `susfs_parse_priority_app_strings()` ✅ 有（全局符号） |
+| `kernel/Kbuild` | — | 探测 `susfs_add_sus_type` → `KSU_SUSFS_HAS_TYPE_REGISTRATION`；preinit runner 加 `-z max-page-size=0x10000` | 我们补丁**没有** `susfs_add_sus_type` → 探测不命中 → 相关调用点编译掉（安全降级） |
+| `kernel/feature/selinux_hide.c` | — | +131 行（`security_context_to_sid_live` 等） | 纯 FinaSU 内部改动，不新增内核侧依赖 |
+
+### 新增的兼容闸门
+
+- `scripts/check_finasu_compat.sh`（新文件）：SUSFS Inline 入口自检 + 「FinaSU Kconfig 选项 → 内核侧提供者」
+  逐项核对 + `.config` 硬要求检查；`FAIL` 即中止，`WARN` 表示安全降级。
+- 流水线新增 **step 8.5**（拿到 `.config` 后复查），并把 `finasu_compat.txt` 纳入产物。
+
 ## 7. 编译缓存（2026-11-08 新增，三层）
 
 1. **Actions 缓存（快路径，首选）**：`actions/cache/restore@v4` 恢复 `$RUNNER_TEMP/toolchain` + `common`（约 2.7 GB），
