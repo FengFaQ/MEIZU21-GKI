@@ -3,7 +3,6 @@
 
 #include <linux/bits.h>
 #include <linux/bitmap.h>
-#include <linux/dcache.h>
 #include <linux/string.h>
 
 /********/
@@ -80,19 +79,6 @@
 
 #define STATX_SUS_KSTAT 0x10000000U
 #define STATX_SUS_KSTAT_FUSE 0x20000000U
-
-/*****************************************/
-/* getpriority uid filter (bitmap)       */
-/*****************************************/
-/* The uids that are hidden from the apps that abuse the getpriority syscall
- * to find out the existing uids. Only the uids within the app uid range
- * (10000 - 19999) are supported.
- */
-#define SUSFS_PRIORITY_UID_FILTER_MIN_UID 10000
-#define SUSFS_PRIORITY_UID_FILTER_MAX_UID 19999
-#define SUSFS_PRIORITY_UID_FILTER_UID_NUM (SUSFS_PRIORITY_UID_FILTER_MAX_UID - SUSFS_PRIORITY_UID_FILTER_MIN_UID + 1)
-#define SUSFS_PRIORITY_UID_FILTER_BITMAP_LEN BITS_TO_LONGS(SUSFS_PRIORITY_UID_FILTER_UID_NUM)
-#define SUSFS_APP_STR_BUF_SIZE 65535
 
 static inline bool susfs_starts_with(const char *str, const char *prefix) {
     while (*prefix) {
@@ -175,13 +161,4 @@ static inline void susfs_clear_current_proc_no_su(void) {
 		inode && inode->i_mapping && \
 		unlikely(test_bit(AS_FLAGS_OPEN_REDIRECT, &inode->i_mapping->flags)) && \
 		susfs_is_current_proc_umounted_app()
-
-static inline bool susfs_is_data_local_tmp_dir(struct dentry *dir) {
-	return (unlikely(dir && dir->d_name.len == 3 &&
-			 !memcmp(dir->d_name.name, "tmp", 3) &&
-			 dir->d_parent && dir->d_parent->d_name.len == 5 &&
-			 !memcmp(dir->d_parent->d_name.name, "local", 5) &&
-			 dir->d_parent->d_parent &&
-			 IS_ROOT(dir->d_parent->d_parent)));
-}
 #endif // #ifndef KSU_SUSFS_DEF_H
