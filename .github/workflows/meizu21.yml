@@ -227,7 +227,13 @@ jobs:
           KERNEL_SRC="$PWD" bash ../scripts/fetch_susfs.sh "$GITHUB_WORKSPACE/susfs"
           cat "$GITHUB_WORKSPACE/susfs/susfs-meta.env" | tee ../susfs-meta.env
 
-          echo "=== [3/4] 应用 SUSFS（严格校验每个 hunk 是否落位）==="
+          echo "=== [3/4] 放入 SUSFS 三源文件 + 应用补丁（严格校验）==="
+          # fetch_susfs.sh 把三文件放在输出目录；必须先放进内核树，
+          # 否则 fs/susfs.c 引用不到、编译期必炸。
+          cp "$GITHUB_WORKSPACE/susfs/fs/susfs.c"              fs/susfs.c
+          cp "$GITHUB_WORKSPACE/susfs/include/linux/susfs.h"   include/linux/susfs.h
+          cp "$GITHUB_WORKSPACE/susfs/include/linux/susfs_def.h" include/linux/susfs_def.h
+          echo "OK SUSFS 三源文件已放入（$(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' include/linux/susfs.h | head -1)）"
           bash ../scripts/apply_susfs.sh "$GITHUB_WORKSPACE/susfs" "$PWD"
 
           echo "=== [4/4] 魅族 SUSFS overlay（verifiedbootstate 伪装等）==="
