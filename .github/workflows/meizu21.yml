@@ -106,14 +106,26 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev lz4 zstd cpio rsync \
                  dwarves kmod file xz-utils python3-cryptography openssl
-          # avbtool：AOSP 官方 AVB 工具（用于给 boot.img 加/验 hash footer）
-          if ! command -v avbtool >/dev/null 2>&1; then
-            sudo curl -sSL --retry 3 -o /usr/local/bin/avbtool \
-              https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool?format=TEXT \
-              && sudo bash -c 'base64 -d /usr/local/bin/avbtool > /tmp/a && mv /tmp/a /usr/local/bin/avbtool' \
-              && sudo chmod +x /usr/local/bin/avbtool || echo "WARN: avbtool 下载失败"
+          # avbtool：AOSP 官方 AVB 工具（给 boot.img 加/验 hash footer）。
+          # 注意：googlesource 上的文件名是 avbtool.py（不是 avbtool），
+          # 且返回的是 base64 包装；run#22 就是因为写错文件名导致 404 → 步骤失败。
+          AVB_SHARE="$HOME/avb"
+          mkdir -p "$AVB_SHARE"
+          if [ ! -s "$AVB_SHARE/avbtool.py" ]; then
+            curl -sSL --retry 3 \
+              "https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool.py?format=TEXT" \
+              | base64 -d > "$AVB_SHARE/avbtool.py" || true
           fi
-          avbtool version 2>/dev/null || python3 /usr/local/bin/avbtool version 2>/dev/null || echo "WARN: avbtool 不可执行（脚本会退到 python 模块方式）"
+          # 必须是有效 Python 脚本，否则直接让构建失败（别拖到重打包才发现）
+          if [ ! -s "$AVB_SHARE/avbtool.py" ] || ! head -c 200 "$AVB_SHARE/avbtool.py" | grep -q 'python\|AVB'; then
+            echo "::error::avbtool.py 下载失败或内容无效"
+            head -c 200 "$AVB_SHARE/avbtool.py" || true
+            exit 1
+          fi
+          chmod +x "$AVB_SHARE/avbtool.py"
+          echo "AVBTOOL=$AVB_SHARE/avbtool.py" >> "$GITHUB_ENV"
+          python3 "$AVB_SHARE/avbtool.py" version || { echo "::error::avbtool 无法运行"; exit 1; }
+          echo "avbtool OK: $AVB_SHARE/avbtool.py"
           which pahole && pahole --version || echo "WARN: pahole 缺失（CONFIG_DEBUG_INFO_BTF=y 会炸）"
           which dtc || true
 
@@ -577,6 +589,7 @@ jobs:
             common/arch/arm64/boot/Image out/boot.img \
             --key "$RUNNER_TEMP/avb_sign.pem" \
             --header-template "$DEVICE_DIR/boot_header_4096.bin" \
+            --avbtool "${AVBTOOL:-}" \
             | tee out/boot_avb_report.txt
 
           # 原厂头模板 + 机型校验
