@@ -1,0 +1,20 @@
+[info] avbtool = /home/runner/avb/avbtool.py
+[info] raw boot: 34963456 B (kernel=34957824, payload_end=0x2158000)
+[run] /usr/bin/python3 /home/runner/avb/avbtool.py add_hash_footer --image /tmp/tmpwc54x93s/boot.img --partition_name boot --partition_size 100663296 --key /home/runner/work/_temp/avb_sign.pem --algorithm SHA256_RSA4096 --salt 90322f7566865a50b85ab9620dc1b04708aeea66e5467a646c55dc020201db08
+
+[verify] Verifying image /tmp/tmpwc54x93s/boot.img using embedded public key
+vbmeta: Successfully verified footer and SHA256_RSA4096 vbmeta struct in /tmp/tmpwc54x93s/boot.img
+boot: Successfully verified sha256 hash of /tmp/tmpwc54x93s/boot.img for image of 34963456 bytes
+  size                 100663296                OK
+  magic                b'ANDROID!'              OK
+  header_version       4                        OK
+  header_size          1584                     OK
+  kernel_size          34957824                 OK
+  ramdisk_size         0                        OK
+  os_version           0x1c00017a               OK
+  cmdline              b''                      OK
+  AVB0@payload_end     b'AVB0'                  OK
+  AVBf@EOF-64          b'AVBf'                  OK
+  footer.vbmeta_offset 34963456                 OK
+  footer.vbmeta_size   2112                     OK（原厂 2496，差异来自 property descriptor 数量）
+BOOT AVB CHECK PASSED（自有密钥签名 + avbtool 验证通过 + 结构与原厂一致）

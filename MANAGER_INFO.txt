@@ -1,0 +1,13 @@
+device=meizu21
+run=25
+gki_sha=0d89215310919593150f0ef047f9fd9902e02bc7
+finasu_ref=v1.6.1 (14a71d953a09e0d706426a17be0f4b422893ab26)
+hook_backend=inline
+manager_apk=FinaSU_v1.6.1_33198-release.apk
+manager_apk_sha256=b35a675c145b49b36bc8e0385c5ac47fc551ec900e6f1e1a96ffa003d46b0c9d
+ksu_expected_size=0x02cc
+ksu_expected_hash=2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458
+clang_source=cache
+kernel_image_size=34957824
+kernel_image_sha256=90322f7566865a50b85ab9620dc1b04708aeea66e5467a646c55dc020201db08
+built_at=2026-11-14T01:58:35Z
