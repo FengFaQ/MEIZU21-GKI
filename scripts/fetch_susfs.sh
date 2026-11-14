@@ -24,10 +24,12 @@ REF="gki-android14-6.1"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --ref) REF="$2"; shift 2 ;;
+    --expect-commit) EXPECT_COMMIT="$2"; shift 2 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
 done
 
+EXPECT_COMMIT=""
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 # 允许用 GitHub 镜像（本机 GitLab 偶尔慢）
 SUSFS_MIRROR="${SUSFS_MIRROR:-https://github.com/JackEblan/susfs4ksu.git}"
@@ -46,8 +48,10 @@ log() { echo "$*" | tee -a "$FIXUP_LOG"; }
 TMP_REPO="${RUNNER_TEMP:-/tmp}/susfs-src"
 rm -rf "$TMP_REPO"
 log "=== 拉取上游 SUSFS ($REF) ==="
-if git clone -q --depth 1 --branch "$REF" "$SUSFS_REPO" "$TMP_REPO" 2>/dev/null \
-   || git clone -q --depth 1 --branch "$REF" "$SUSFS_MIRROR" "$TMP_REPO" 2>/dev/null; then
+# 注意：`git clone --branch <裸commit>` 会去远端找同名分支并长时间挂起，
+# 所以这里只接受分支名；commit 固定通过 --expect-commit 校验（见下）。
+if timeout 120 git clone -q --depth 1 --branch "$REF" "$SUSFS_REPO" "$TMP_REPO" 2>/dev/null \
+   || timeout 120 git clone -q --depth 1 --branch "$REF" "$SUSFS_MIRROR" "$TMP_REPO" 2>/dev/null; then
   SUSFS_COMMIT="$(git -C "$TMP_REPO" rev-parse HEAD)"
   log "commit=$SUSFS_COMMIT"
   KP="$TMP_REPO/kernel_patches"
@@ -63,6 +67,15 @@ else
   curl -sSL --retry 3 -o "$OUT/include/linux/susfs.h"        "$RAW/kernel_patches/include/linux/susfs.h"
   curl -sSL --retry 3 -o "$OUT/include/linux/susfs_def.h"    "$RAW/kernel_patches/include/linux/susfs_def.h"
   SUSFS_COMMIT="unknown"
+fi
+
+# pin 校验：分支会漂移（实测同分支两次拉到不同 commit），
+# 用 --expect-commit 固定后，漂移就立刻失败而不是悄悄换版本。
+if [ -n "$EXPECT_COMMIT" ] && [ "$SUSFS_COMMIT" != "$EXPECT_COMMIT" ]; then
+  log "::error::上游 SUSFS 已漂移：期望 $EXPECT_COMMIT，实际 $SUSFS_COMMIT"
+  echo "::error::SUSFS commit 漂移（期望 $EXPECT_COMMIT，实际 $SUSFS_COMMIT）。"
+  echo "  处理：① 复核新 commit 后更新 SUSFS_COMMIT pin；或 ② 回退上游分支。"
+  exit 1
 fi
 
 SUSFS_VERSION="$(sed -n 's/^#define SUSFS_VERSION "\(.*\)"/\1/p' "$OUT/include/linux/susfs.h" | head -1)"
@@ -108,15 +121,50 @@ if [ -f "$BASE_C" ]; then
 fi
 
 # --- 修复 3：fs/namespace.c 的 blk.h 上下文 ------------------------------
-# 2026-10-19 起的补丁把 `#include <trace/hooks/blk.h>` 当上下文行（要求存在）。
-# r17 没有这行 → 补上；**不能删**（删了反而 hunk 失配，ak3_XHigh 的注释记了这个坑）。
+# 上游补丁把 `#include <trace/hooks/blk.h>` 当 hunk 的上下文行。我们的 r17 内核
+# **没有这个头文件**（include/trace/hooks/ 存在但无 blk.h，那是更新内核才加的），
+# 所以不能"补上这行让 hunk 匹配" —— 那会导致
+#   fs/namespace.c:41:10: fatal error: 'trace/hooks/blk.h' file not found
+# （run#21 实测）。
+# 正确做法：从补丁副本里删掉这行上下文（源码不动），并重算该 hunk 的行数。
 NS_C="$KERNEL_SRC/fs/namespace.c"
-if [ -f "$NS_C" ] && grep -q '^ #include <trace/hooks/blk\.h>' "$OUT/susfs.patch"; then
-  if ! grep -qF '#include <trace/hooks/blk.h>' "$NS_C"; then
-    sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' "$NS_C" \
-      && ADDED_INCLUDES+=("trace/hooks/blk.h(ns)")
-    log "[fixup] namespace.c 补 include <trace/hooks/blk.h>（hunk 上下文行）"
-  fi
+if [ -f "$NS_C" ] && grep -q '^ #include <trace/hooks/blk\.h>' "$OUT/susfs.patch" \
+   && [ ! -f "$KERNEL_SRC/include/trace/hooks/blk.h" ]; then
+  log "[fixup] 目标内核无 trace/hooks/blk.h → 从补丁里移除该上下文行"
+  python3 - "$OUT/susfs.patch" <<'PYEOF'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text(encoding='utf-8').splitlines(keepends=True)
+out, i, dropped = [], 0, 0
+while i < len(lines):
+    line = lines[i]
+    hunk = re.match(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
+    if not hunk:
+        out.append(line); i += 1; continue
+    # 收集这个 hunk 的全部行（直到下一个 @@ 或 diff --git）
+    j = i + 1
+    body = []
+    while j < len(lines) and not lines[j].startswith('@@') and not lines[j].startswith('diff --git'):
+        body.append(lines[j]); j += 1
+    # 删掉「上下文行形如 ' #include <trace/hooks/blk.h>'」的那一行
+    newbody = [b for b in body if b.rstrip('\n') != ' #include <trace/hooks/blk.h>']
+    removed = len(body) - len(newbody)
+    if removed:
+        dropped += removed
+        o_start = int(hunk.group(1)); o_cnt = int(hunk.group(2) or 1)
+        n_start = int(hunk.group(3)); n_cnt = int(hunk.group(4) or 1)
+        o_cnt -= removed; n_cnt -= removed
+        if o_cnt == 1: newh = f'@@ -{o_start} +{n_start} @@\n'
+        else: newh = f'@@ -{o_start},{o_cnt} +{n_start},{n_cnt} @@\n'
+        out.append(newh)
+    else:
+        out.append(line)
+    out.extend(newbody)
+    i = j
+p.write_text(''.join(out), encoding='utf-8')
+print(f'[fixup] 已从补丁移除 {dropped} 处 blk.h 上下文行')
+PYEOF
+  ADDED_INCLUDES+=("removed-blk-from-patch")
 fi
 
 # --- 修复 4：super.c 旧上下文（仅当补丁仍含 thaw_super_locked 锚点）------

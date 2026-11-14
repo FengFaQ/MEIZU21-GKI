@@ -63,6 +63,11 @@ env:
   CLANG_ID: clang-r487747c
   # FinaSU 不在缓存里：每次构建实时拉最新 release（源码 + APK + 证书都现取现用）
   FINASU_REPO: LyraVoid/FinaSU
+  # SUSFS 上游 pin：自动跟随"分支"会漂移（实测同一分支两次拉到 69b8e73 与
+  # 342943db），产物不可复现、也无法回溯。这里 pin 到经验证的 commit；
+  # 想跟最新就把 cache-trigger 那套流程走一遍并更新此处。
+  SUSFS_BRANCH: gki-android14-6.1
+  SUSFS_COMMIT: 342943dbef8a1e996354fd94be4a98f4d556f3df
   DEVICE_DIR: device/meizu21
   MAKE_JOBS: '4'
   KBUILD_BUILD_USER: build-user
@@ -232,7 +237,8 @@ jobs:
 
           echo "=== [2/4] 拉上游 SUSFS + 按内核版本修上下文（自动跟随）==="
           # 输出到 $GITHUB_WORKSPACE/susfs，含 susfs.patch / 三源文件 / susfs-meta.env
-          KERNEL_SRC="$PWD" bash ../scripts/fetch_susfs.sh "$GITHUB_WORKSPACE/susfs"
+          KERNEL_SRC="$PWD" bash ../scripts/fetch_susfs.sh "$GITHUB_WORKSPACE/susfs" \
+            --ref "${SUSFS_BRANCH}" --expect-commit "${SUSFS_COMMIT}"
           cat "$GITHUB_WORKSPACE/susfs/susfs-meta.env" | tee ../susfs-meta.env
 
           echo "=== [3/4] 放入 SUSFS 三源文件 + 应用补丁（严格校验）==="
