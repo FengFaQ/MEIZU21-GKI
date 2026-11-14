@@ -612,6 +612,56 @@ jobs:
           ls -la out/
           (cd out && sha256sum * > sha256sums.txt && cat sha256sums.txt)
 
+      - name: 15.5 QEMU 早期启动验证（对比原厂基线）
+        run: |
+          set -uo pipefail
+          # 用 QEMU virt 跑内核，检出「内核二进制健康」：
+          #   · 能否进入 start_kernel（boot.img 结构 / 加载跳转正确）
+          #   · 有无 kCFI trap / Unknown symbol / Oops
+          #   · SUSFS + KernelSU 是否真在运行时初始化（不只是编译通过）
+          # 不能证明真机能开机（QEMU 无 SM8650 硬件、无 vendor 模块、不校验 AVB）。
+          if ! command -v qemu-system-aarch64 >/dev/null 2>&1; then
+            echo "安装 qemu-user/系统模拟…"
+            sudo apt-get install -y -qq qemu-system-arm || true
+          fi
+          # 原厂基线对照（若无原厂 boot 则跳过对比，仍跑自编内核）
+          STOCK=""
+          # 原厂 boot 以 zlib 存仓库（96 MiB 裸文件不适合进 git），运行时解压到临时目录
+          if [ -f "$DEVICE_DIR/stock_boot.img.zlib" ]; then
+            python3 - "$DEVICE_DIR/stock_boot.img.zlib" "$RUNNER_TEMP/stock_boot.img" <<'PY'
+          import hashlib, sys, zlib, pathlib
+          src, dst = sys.argv[1], sys.argv[2]
+          raw = zlib.decompress(pathlib.Path(src).read_bytes())
+          sha = hashlib.sha256(raw).hexdigest()
+          assert len(raw) == 100663296, f'原厂 boot 解压后大小异常: {len(raw)}'
+          assert sha.startswith('8c899eb3b7fcb65e'), f'原厂 boot sha256 不符: {sha}'
+          pathlib.Path(dst).write_bytes(raw)
+          print(f'[stock] 解压 OK {len(raw)} B sha256={sha[:16]}…')
+          PY
+            STOCK="$RUNNER_TEMP/stock_boot.img"
+          fi
+          for cand in /opt/stock/boot.img; do
+            [ -z "$STOCK" ] && [ -f "$cand" ] && STOCK="$cand"
+          done
+          set +e
+          bash scripts/qemu_boot_test.sh out/boot.img > out/qemu_ours.log 2>&1
+          rc_ours=$?
+          set -e
+          cat out/qemu_ours.log
+          if [ -n "$STOCK" ]; then
+            set +e
+            bash scripts/qemu_boot_test.sh "$STOCK" > out/qemu_stock.log 2>&1
+            rc_stock=$?
+            set -e
+            echo "=== 原厂基线 ==="; tail -12 out/qemu_stock.log || true
+            echo "[qemu] 原厂 exit=$rc_stock / 自编 exit=$rc_ours"
+          fi
+          if [ "$rc_ours" -ne 0 ]; then
+            echo "::error::自编内核未通过 QEMU 早期启动验证（详见 out/qemu_ours.log）"
+            exit 1
+          fi
+          echo "[qemu] 自编内核早期启动健康"
+
       - name: 16. 汇总产物
         run: |
           set -euo pipefail
@@ -677,7 +727,7 @@ jobs:
                    "out/${MANAGER_APK}" out/boot_avb_report.txt out/boot_header_check.txt \
                    out/gate1_version.txt out/gate2_kmi.log out/gate3_kcfi.log \
                    out/MANAGER_INFO.txt out/sha256sums.txt out/build_kernel.log \
-                   out/susfs-meta.env out/finasu_compat.txt; do
+                   out/susfs-meta.env out/finasu_compat.txt out/qemu_ours.log; do
             [ -f "$f" ] && ASSETS+=("$f")
           done
           echo "将上传 ${#ASSETS[@]} 个资产："; printf '  %s\n' "${ASSETS[@]}"

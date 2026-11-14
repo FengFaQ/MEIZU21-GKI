@@ -44,3 +44,10 @@ kernel_banner_timestamp=Wed Oct 28 18:11:17 UTC 2026
 kernel_clang=Android (10087095, +pgo, +bolt, +lto, -mlgo, based on r487747c) clang version 17.0.2
 
 system_dlkm_release_dir=6.1.25-android14-11-maybe-dirty
+
+# QEMU 对照基线（原厂 boot.img 原样存档，用于 qemu_boot_test.sh 对比）
+stock_boot_file=stock_boot.img
+stock_boot_size=100663296
+stock_boot_sha256=8c899eb3b7fcb65eff6bb4afd015f90984ce50d351eceb7eda7ef06bbc4619f5
+stock_kernel_size=33892864
+qemu_baseline_note=QEMU virt 下原厂内核跑到 4.6s 停在 'VFS: Unable to mount root fs'（无 rootfs，预期）
