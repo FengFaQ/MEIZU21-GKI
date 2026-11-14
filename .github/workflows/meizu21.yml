@@ -670,16 +670,24 @@ jobs:
 
           **管理器必须装本 release 附带的 FinaSU APK**（内核里编的是它的证书哈希，装别的版本会显示“未安装”）。
           EOF
+          # 只上传实际存在的文件 —— run#23 就是因为列了已删除的 v2 报告，
+          # gh 报 "no matches found" 导致整个 release 创建失败（静默只更新了 dist）。
+          ASSETS=()
+          for f in out/boot.img out/Image out/vmlinux.symvers out/kernel.config \
+                   "out/${MANAGER_APK}" out/boot_avb_report.txt out/boot_header_check.txt \
+                   out/gate1_version.txt out/gate2_kmi.log out/gate3_kcfi.log \
+                   out/MANAGER_INFO.txt out/sha256sums.txt out/build_kernel.log \
+                   out/susfs-meta.env out/finasu_compat.txt; do
+            [ -f "$f" ] && ASSETS+=("$f")
+          done
+          echo "将上传 ${#ASSETS[@]} 个资产："; printf '  %s\n' "${ASSETS[@]}"
           gh release create "$TAG" --title "$TITLE" --notes-file /tmp/release_notes.md \
-            out/boot.img out/Image out/vmlinux.symvers out/kernel.config \
-            "out/${MANAGER_APK}" out/boot_avb_report.txt out/boot_avb_report_v2.txt \
-            out/gate1_version.txt out/gate2_kmi.log out/gate3_kcfi.log \
-            out/MANAGER_INFO.txt out/sha256sums.txt out/build_kernel.log \
+            "${ASSETS[@]}" \
             || echo "WARN: release 发布失败（不影响 dist 分支）"
           # dist 分支（本机 github.com HTTPS 不通，只能走这条取产物）
           mkdir -p /tmp/distpkg
           cp out/boot.img out/Image out/vmlinux.symvers out/kernel.config \
-             "out/${MANAGER_APK}" out/boot_avb_report.txt out/boot_avb_report_v2.txt \
+             "out/${MANAGER_APK}" out/boot_avb_report.txt out/boot_header_check.txt \
              out/gate1_version.txt out/gate2_kmi.log out/gate3_kcfi.log \
              out/MANAGER_INFO.txt out/sha256sums.txt out/build_kernel.log /tmp/distpkg/ 2>/dev/null || true
           cd /tmp/distpkg
