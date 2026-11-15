@@ -1,7 +1,7 @@
 # 交接文档 · 魅族 21 GKI
 
 > 给下一个接手的人 / AI。目标：30 分钟内知道「这是什么 / 现在到哪 / 下一步 / 别碰什么」。
-> 最后更新：2026-11-08
+> 最后更新：2026-11-15
 
 ---
 
@@ -20,10 +20,28 @@
 | 项 | 状态 |
 |---|---|
 | 设备事实（config / KMI / kCFI / boot 头） | ✅ 齐全（`device/meizu21/`） |
-| CI 完整流水线 | ✅ run#25 全绿（缓存 → 编译 → 三门禁 → 重打包 → QEMU → release + dist） |
+| CI 完整流水线 | ✅ **run#27 全绿**（24 步：缓存 → 编译 → 三门禁 → 重打包 → QEMU → release + dist） |
 | 重打包结构 | ✅ **已改正**：无 AVB、无签名、原厂头 + kernel + 零填充 |
 | 回归测试 | ✅ 参考 kernel 重打包 → 与 `resukisu-boot.img` **逐字节相同**（sha256 `3eb02d29…61bb`） |
+| 模块加载门禁 | ✅ 696 个 vendor .ko 的 `module_layout` 全为 `0xea759d7f`，与本构建一致 |
 | 真机刷入验证 | ❌ 未做（下一步，只刷非活动槽） |
+
+### run#27 实测产物（2026-11-15，可直接刷）
+
+| 文件 | 大小 | sha256 |
+|---|---|---|
+| `boot.img` | 100,663,296 | `78ce8473ee45336e419e814cdc57430f1ba46cd2a4d49133e60e8c6de04c02b3` |
+| `Image` | 34,957,824 | `686737ec9486a98d53298e3a81cc31c5cf69afef377edea460cc32767c8e19ea` |
+| `FinaSU_v1.6.2_33203-release.apk` | 28,711,012 | `61fea3ba60e78d43638c8839ff88f79e409405cb74b53acc1791faac1a8840ab` |
+
+`boot_avb_report.txt` 自检全绿：`hdr diff offsets [9, 10]` / `hdr only kernel_size True` /
+`payload_end aligned True` / `tail_zero_filled True` / `no AVB0 magic True` /
+`has AVBf @EOF-64 False` / `has AVBf anywhere False`。
+独立复核：`boot.img.find(b'AVB0') == -1`、`find(b'AVBf') == -1`、尾部 64 B 全零。
+
+三门禁（run#27）：gate1 `release_actual=6.1.25-android14-11-maybe-dirty`；
+gate2 `(stock-built) ∩ NEED = 0`、built exported 14,688；
+gate3 `21 MATCH, 0 MISMATCH, 3 N/A`。
 
 ### 本次修复的产物结构（`scripts/make_boot_zeroavb.py`）
 
@@ -35,9 +53,10 @@
 
 ### 下一步
 
-1. 触发 CI（`workflow_dispatch`，inputs 4 个），确认 `out/boot.img` 通过第 15 步自检。
-2. 用 `docs/FLASH_SOP.md` 的步骤**只刷非活动槽**。
-3. 首刷后按 SOP 回填 dmesg（kCFI `expected type`、Unknown symbol、`version magic`）。
+1. 刷 run#27 的 `boot.img`（sha256 `78ce8473…02b3`），用 `docs/FLASH_SOP.md` 的步骤**只刷非活动槽**。
+2. 首刷后按 SOP 回填 dmesg（kCFI `expected type`、Unknown symbol、`version magic`）。
+3. 若仍不能开机，按 `docs/FLASH_DIAGNOSIS.md` 的 B1→B2→B3 逐级剥离：
+   `hook_backend=tracepoint` → 关 `CONFIG_KSU_SUSFS` → 关 `CONFIG_KSU`（纯 GKI 能否开机是关键判据）。
 4. 真机通过后，`tools/fetch_dist.ps1` 可随时取回最新产物。
 
 ## 2. 仓库结构
@@ -59,7 +78,7 @@ docs/FLASH_SOP.md               刷机 / 回退 / 故障诊断
 |---|---|
 | GKI 源码 | `kernel/common` @ `0d89215310919593150f0ef047f9fd9902e02bc7`（`android14-6.1-2023-10_r17`） |
 | 工具链 | `clang-r487747c`（Android clang 17.0.2），AOSP prebuilts 分支 `android14-release` |
-| FinaSU | tag `v1.5.0` = `fbf8e003d902c43213d435632a22e4fb1a219aeb`；APK sha256 `6860cc33…b6638` |
+| FinaSU | 流水线按 `latest` 实时拉取；run#27 为 `v1.6.2` = `6cc294cc530eed32a10ff4d841af83c1bc0c2dc4`；APK sha256 `61fea3ba…40ab` |
 | 管理器证书 | `0x02cc` / `2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458` |
 | 原厂 boot | sha256 `8c899eb3…4619f5`，100,663,296 B |
 | 原厂 config | 从原厂 boot.img 的 IKCONFIG 提取（7430 行） |
