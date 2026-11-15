@@ -30,13 +30,30 @@
 ### 1.3 LTO 必须是 none
 `CONFIG_LTO_NONE=y`。`thin` 会改变 kCFI 哈希分布；原厂就是 none。
 
-### 1.4 boot.img 必须带 AVB0 + AVBf，而且 vbmeta 是签名的
-魅族 ABL 即使 BL 解锁也读这两块。缺了 → 直接跳 Fastboot。
-- `AVBf`（footer）在 `EOF - 64`；`AVB0`（vbmeta）紧接 payload 末尾，**2496 B**。
-- **实测**：vbmeta `algorithm_type=2`（SHA256_RSA4096，签名 512 B）、`auth_block_size=576`、
-  `aux_block_size=1664`、`descriptors_offset=0`（相对 aux 起点）、`descriptors_size=608`。
-  签名覆盖 header + aux block（descriptors 在 aux 里）→ **改 descriptor 就会破坏签名**（没有魅族私钥）。
-- 唯一做法：**vbmeta 字节原样保留**，只搬位置 + 改 footer 的 `orig_image_size/vbmeta_offset`。
+### 1.4 boot.img 必须**不带** AVB（与可开机参考镜像同构）
+> 2026-11-15 更正。旧版这里写「必须带 AVB0 + AVBf，缺了直接跳 Fastboot」——**那是错的**，
+> 而且正是它导致了 run#11~run#23 全部起不来。证据见下。
+
+三条路线，只有第三条能开机：
+
+| 做法 | 结果 | 原因 |
+|---|---|---|
+| 保留原厂 vbmeta 字节 | ❌ 失败 | 换 kernel 后 descriptor 的 `image_size/salt/digest` 必然过期，签名覆盖 aux（含 descriptor），无魅族私钥 → 校验必败 |
+| 用自有密钥重签 AVB | ❌ 更糟 | vbmeta 自带公钥只对「自己验自己」成立；**公钥不在引导器信任根里**，等于主动声明一个陌生的签名者 |
+| **完全不写 AVB** | ✅ 可开机 | 引导器在 `EOF-64` 找不到 `AVBf`、在 payload 后找不到 `AVB0`，按「无 AVB 镜像」处理，直接引导 |
+
+**实测参考镜像** `resukisu-boot.img`（34,369,536 B，sha256 `3eb02d29…61bb`）就是第三条路线：
+- 头部 v4 / header_size 1584 / ramdisk 0 / os_version `0x1C00017A` / cmdline 空 / signature_size 0，全部与原厂逐字节一致；
+- **与原厂头页的唯一差异是 `kernel_size`（偏移 8~11）**，其余 4092 B 完全相同；
+- 布局 = `4096 + roundup4096(kernel_size)`，**文件在 payload 末尾直接结束**，`AVB0` 与 `AVBf` 都不存在；
+- 没有填充到 96 MiB 分区大小。
+
+`scripts/make_boot_zeroavb.py` 已按此实现，并有回归测试：把参考镜像的 kernel 抽出来重新打包，
+产物 sha256 **与参考镜像完全相同**（`3eb02d29…61bb`）；把原厂 kernel 重新打包，`[0, payload_end)`
+与原厂镜像逐字节相同。这两个不变量就是「结构正确」的定义。
+
+`fastboot flash` 会按分区覆盖写入，所以默认输出仍补齐到 96 MiB，以便顺带清掉分区更后面的
+旧 `AVBf` 残留；`--bare` 则精确复现参考镜像的尺寸。在 `[0, payload_end)` 内两种输出与参考镜像同构。
 
 ## 2. 参考树（21 Pro）的配方与复用边界
 
@@ -113,14 +130,15 @@
 | 项 | 原因 |
 |---|---|
 | 移植 21 Pro 树的 soter / TEESimulator / 伪装管理器 | 用户选择路线 A：Root 用 FinaSU 官方 |
-| 重签 vbmeta | 没有 Meizu 私钥（RSA-4096）；自签 key 只会更糟 |
+| 重签 vbmeta | 没有 Meizu 私钥（RSA-4096）；自签 key 只会更糟 —— 已由 2026-11-15 实测结论确认，见 §1.4 |
 | 改 `TRIM_UNUSED_KSYMS=y` | 与 KMI 清单语义冲突，且原厂模块只查自己 NEED 的符号 |
 | 两槽一起刷 | 刷坏没有回退槽 |
 | 在本机 Windows 上编译 | 参考树被拷贝损伤；且用户要求编译放 Actions |
 
 ## 7. 待验证（未证实，别当事实用）
 
-1. BL 解锁后是否真的跳过 AVB 校验（决定 v1 能否开机）。
+1. 无 AVB 结构的 boot.img 在真机上能否通过 ABL（这是本次修复的核心假设；参考镜像已证明
+   该结构在**同代魅族设备**上可引导，但本机仍需实刷确认）。
 2. 8 个 OneMind traceiter 的 kCFI 期望哈希在 21 上是否与继承值一致（首刷 dmesg 回填）。
 3. FinaSU Inline hook 在真机上的状态（管理器显示 Built-In / hook OK？）。
 4. `CONFIG_MZ_*`（原厂私有 Kconfig）被 olddefconfig 丢弃后，21 厂商模块行为是否异常。

@@ -1,6 +1,6 @@
 # 刷机 SOP · 魅族 21（M2461）
 
-> 前提：BL 已解锁、`fastboot` 可用、已装本 release 附带的 **FinaSU v1.5.0 APK**。
+> 前提：BL 已解锁、`fastboot` 可用、已装本 release 附带的 **FinaSU APK**（当前 v1.6.1）。
 > 铁律：**只刷非活动槽**，保留一个能启动的槽。
 
 ---
@@ -67,7 +67,7 @@ fastboot reboot
 | 现象 | 最可能原因 | 下一步 |
 |---|---|---|
 | 卡第一屏 2~3 秒循环重启 | ① release 串不符 ② kCFI 崩溃 ③ 模块 CRC 不符 | `dmesg` 区分：`version magic` / `CFI failure` / `disagrees about version` |
-| 直接跳回 Fastboot | AVB0/AVBf 缺失或布局不对 | 跑 `scripts/audit_boot.py boot.img`，应 PASS |
+| 直接跳回 Fastboot | boot 结构/布局不对 | 跑 `scripts/make_boot_zeroavb.py` 的自检，应 PASS |
 | 能开机但 WiFi/相机/触摸异常 | 对应 vendor 模块没加载 | `dmesg | grep -i unknown symbol`；把缺失符号回填到 `module_kmi_manifest` 复核 |
 | 能开机但管理器显示「未安装」 | 装的 APK 与内核里的证书不匹配 | **必须**装 release 附带的那份 FinaSU APK |
 | 管理器显示 Built-In 但 hook 异常 | SUSFS Inline 入口没对上 | 用 workflow 输入 `hook_backend=tracepoint` 重编一版 |
@@ -84,7 +84,7 @@ fastboot reboot
 
 ## 7. 二级保险（可选）
 
-如果 v1（原厂 vbmeta 字节）起不来、v2（重算 digest）也起不来，说明 BL 强制校验 AVB。
+如果**无 AVB** 的镜像（当前产物）仍起不来，说明 ABL 强制校验 AVB 或另有限制。
 此时不要继续盲试，先回退，然后：
 
 - 确认 BL 解锁状态（`fastboot getvar unlocked` / `flashing unlock` 已做过？）；

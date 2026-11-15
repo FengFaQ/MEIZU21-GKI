@@ -23,12 +23,6 @@ on:
         default: 'true'
         type: choice
         options: ['true', 'false']
-      emit_v2_digest:
-        description: '是否额外产出 v2（重算 AVB digest）镜像'
-        required: true
-        default: 'true'
-        type: choice
-        options: ['true', 'false']
       finasu_ref:
         description: 'FinaSU 版本：latest=每次取最新 release（推荐）；也可填 tag（如 v1.6.1 / v1.5.0）'
         required: false
@@ -85,7 +79,6 @@ jobs:
       HOOK_BACKEND: ${{ inputs.hook_backend || 'inline' }}
       STRICT_KCFI: ${{ inputs.strict_kcfi || 'false' }}
       PUBLISH: ${{ inputs.publish || 'true' }}
-      EMIT_V2: ${{ inputs.emit_v2_digest || 'true' }}
       FINASU_INPUT: ${{ inputs.finasu_ref || 'latest' }}
 
     steps:
@@ -105,27 +98,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev lz4 zstd cpio rsync \
-                 dwarves kmod file xz-utils python3-cryptography openssl
-          # avbtool：AOSP 官方 AVB 工具（给 boot.img 加/验 hash footer）。
-          # 注意：googlesource 上的文件名是 avbtool.py（不是 avbtool），
-          # 且返回的是 base64 包装；run#22 就是因为写错文件名导致 404 → 步骤失败。
-          AVB_SHARE="$HOME/avb"
-          mkdir -p "$AVB_SHARE"
-          if [ ! -s "$AVB_SHARE/avbtool.py" ]; then
-            curl -sSL --retry 3 \
-              "https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool.py?format=TEXT" \
-              | base64 -d > "$AVB_SHARE/avbtool.py" || true
-          fi
-          # 必须是有效 Python 脚本，否则直接让构建失败（别拖到重打包才发现）
-          if [ ! -s "$AVB_SHARE/avbtool.py" ] || ! head -c 200 "$AVB_SHARE/avbtool.py" | grep -q 'python\|AVB'; then
-            echo "::error::avbtool.py 下载失败或内容无效"
-            head -c 200 "$AVB_SHARE/avbtool.py" || true
-            exit 1
-          fi
-          chmod +x "$AVB_SHARE/avbtool.py"
-          echo "AVBTOOL=$AVB_SHARE/avbtool.py" >> "$GITHUB_ENV"
-          python3 "$AVB_SHARE/avbtool.py" version || { echo "::error::avbtool 无法运行"; exit 1; }
-          echo "avbtool OK: $AVB_SHARE/avbtool.py"
+                 dwarves kmod file xz-utils python3-cryptography
+          # 不再安装 avbtool：重打包已改为「按可开机参考镜像结构，不写 AVB」，
+          # 全程不需要 AVB 签名工具（原先下载 avbtool.py 曾是 run#22 的失败点）。
           which pahole && pahole --version || echo "WARN: pahole 缺失（CONFIG_DEBUG_INFO_BTF=y 会炸）"
           which dtc || true
 
@@ -553,43 +528,36 @@ jobs:
             echo "WARN 门禁 3/3 未全绿（strict_kcfi=false，继续；首刷后用 dmesg 回填期望值）"
           fi
 
-      - name: 15. 重打包 boot.img（自有密钥重签 AVB，分区内自洽）
+      - name: 15. 重打包 boot.img（按可开机参考镜像结构：无 AVB、无签名）
         run: |
           set -euo pipefail
           mkdir -p out
-          # 为什么必须重签而不是沿用原厂 vbmeta：
-          #   原厂 vbmeta 是 RSA-4096 签名的，签名覆盖 hash descriptor；
-          #   换 kernel 后 descriptor 必然不符，且没有魅族私钥 → 原签名失效
-          #   → 真机「亮 logo 数秒后自动重启」（run#17 实测）。
-          #   AVB 模型是「vbmeta 自带公钥、用对应私钥验自己」，所以用自有密钥
-          #   重签后 boot 分区自洽可校验，不需要原厂私钥、也不需要动 vbmeta 分区。
+          # 结构依据：同机型已实测能开机的 GKI 范例 resukisu-boot.img
+          #   34,369,536 B；header v4；kernel@0x1000；payload 只按 4096 对齐收尾；
+          #   **完全没有 AVB**（无 AVB0、EOF-64 处无 AVBf）。
+          #   实测：它的 4096 字节头与原厂头逐字节相同，只有 kernel_size 不同。
+          #
+          # 为什么不再用「自有密钥重签 AVB」（b535c9b 的做法，已废弃）：
+          #   AVB 的信任模型是「vbmeta 自带公钥 + 用对应私钥验自己」，
+          #   但前提是**引导链信任那把公钥**。魅族原厂 vbmeta 是 RSA-4096 签名、
+          #   公钥根在魅族手里；换 kernel 后 descriptor 必然 stale，而我们没有私钥。
+          #     保留原厂 vbmeta → descriptor 与 kernel 不符 → 校验失败
+          #     用自有密钥重签  → 公钥不在信任根里   → 校验失败（比不签更糟）
+          #     **完全不写 AVB** → 引导器找不到 footer → 按无 AVB 镜像处理 → 可启动
+          #   参考镜像走第三条并实测能开机，本步骤与它保持一致。
           test -f "$DEVICE_DIR/boot_header_4096.bin" \
             || { echo "缺少原厂 boot 头模板"; exit 1; }
-
-          # --- 取 AVB 签名私钥 ---
-          # 优先 Secret（公开仓库不能存私钥）；缺失则本轮生成一把临时的，
-          # 但会明确警告：临时密钥下次构建就变，不能跨版本复用。
-          if [ -n "${AVB_SIGN_KEY_PEM:-}" ]; then
-            printf '%s\n' "$AVB_SIGN_KEY_PEM" > "$RUNNER_TEMP/avb_sign.pem"
-            echo "[avb] 使用仓库 Secret AVB_SIGN_KEY_PEM"
-            KEY_MODE=secret
-          else
-            echo "::warning::未配置 AVB_SIGN_KEY_PEM，本轮生成临时 RSA-4096 密钥（不可跨构建复用）"
-            openssl genrsa -out "$RUNNER_TEMP/avb_sign.pem" 4096
-            KEY_MODE=ephemeral
-          fi
-          openssl rsa -in "$RUNNER_TEMP/avb_sign.pem" -noout -text 2>/dev/null | head -1
-          echo "AVB_KEY_MODE=$KEY_MODE" >> "$GITHUB_ENV"
 
           img_size="$(stat -c%s common/arch/arm64/boot/Image)"
           echo "Image size=$img_size"
           test "$img_size" -lt 94371840 || { echo "Image 太大（>90 MiB）"; exit 1; }
 
-          python3 scripts/avb_sign_boot.py \
+          # 默认输出 96 MiB（= 原厂 boot 分区大小）：payload 之后全零，
+          # 这样 fastboot flash 会把分区里更后面的旧 AVBf footer 一并覆盖掉。
+          # [0, payload_end) 区间与参考镜像结构完全一致。
+          python3 scripts/make_boot_zeroavb.py \
             common/arch/arm64/boot/Image out/boot.img \
-            --key "$RUNNER_TEMP/avb_sign.pem" \
             --header-template "$DEVICE_DIR/boot_header_4096.bin" \
-            --avbtool "${AVBTOOL:-}" \
             | tee out/boot_avb_report.txt
 
           # 原厂头模板 + 机型校验
@@ -708,7 +676,7 @@ jobs:
           Root：FinaSU ${FINASU_REF}（内核内建 KSU，SUSFS Inline / Tracepoint 由 workflow 输入决定）
 
           产物：
-          - boot.img（v1，原厂 vbmeta 字节）→ **先刷这个**
+          - boot.img（无 AVB / 无签名，结构与可开机参考镜像同构）→ **先刷这个**
           - Image / Module.symvers / kernel.config / 门禁日志 / MANAGER_INFO.txt
 
           只刷非活动槽：

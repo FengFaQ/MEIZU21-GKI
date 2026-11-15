@@ -7,44 +7,38 @@
 
 ## 0. 一句话
 
-用 **GKI android14-6.1（6.1.25 / os_patch 2023-10）+ 21 Pro 参考树的兼容层补丁 + FinaSU v1.5.0 内建**，
-在 GitHub Actions 里编出魅族 21（M2461）的 `Image`，再重打包成带 AVB 的 96 MiB `boot.img`（只替换 boot 分区）。
+用 **GKI android14-6.1（6.1.25 / os_patch 2023-10）+ 21 Pro 参考树的兼容层补丁 + FinaSU 内建**，
+在 GitHub Actions 里编出魅族 21（M2461）的 `Image`，再重打包成 **与可开机参考镜像同构、不带 AVB** 的
+96 MiB `boot.img`（只替换 boot 分区）。
 
-## 1. 当前状态（2026-11-13 更新：run#13 全绿，FinaSU v1.6.1）
+## 1. 当前状态（2026-11-15 更新：重打包方式已按可开机参考镜像改正）
+
+> **2026-11-15 关键更正**：此前 run#11~run#23 的 boot.img 一律「自带 AVB」——要么塞原厂 stale vbmeta，
+> 要么用自有密钥重签。两者都必然被引导器拒绝（详见 `MEMORY.md §1.4`）。现已改为**完全不写 AVB**，
+> 与实测可开机的参考镜像 `resukisu-boot.img` 结构一致，并有逐字节回归测试。
 
 | 项 | 状态 |
 |---|---|
-| 设备事实（config / KMI / kCFI / AVB 骨架 / boot 头） | ✅ 齐全（`device/meizu21/`） |
-| CI 完整流水线 | ✅ **run#11 全绿**（缓存 → 编译 → 三门禁 → v1/v2 重打包 → release + dist） |
-| release 产物 | ✅ **`meizu21-13`**（FinaSU v1.6.1）：boot.img / boot-v2digest.img / Image / APK / 日志 |
-| dist 分支 | ✅ 已建立（本机取产物唯一通道） |
+| 设备事实（config / KMI / kCFI / boot 头） | ✅ 齐全（`device/meizu21/`） |
+| CI 完整流水线 | ✅ run#25 全绿（缓存 → 编译 → 三门禁 → 重打包 → QEMU → release + dist） |
+| 重打包结构 | ✅ **已改正**：无 AVB、无签名、原厂头 + kernel + 零填充 |
+| 回归测试 | ✅ 参考 kernel 重打包 → 与 `resukisu-boot.img` **逐字节相同**（sha256 `3eb02d29…61bb`） |
 | 真机刷入验证 | ❌ 未做（下一步，只刷非活动槽） |
 
-### run#13 产物（FinaSU v1.6.1，2026-11-13，已本机复核）
+### 本次修复的产物结构（`scripts/make_boot_zeroavb.py`）
 
-`Image` 34,892,288 B、sha256 `dfcf8449af6189f05b92fcf8f134360c309c61c2f813278be0288c9f1892c13f`；
-管理器 APK `FinaSU_v1.6.1_33198-release.apk`（28,674,148 B，sha256 `b35a675c…`）；
-`CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y` 已由 olddefconfig 自动打开；门禁 1/2/3 全过
-（kCFI 21 MATCH + 3 N/A）。取回：`tools/fetch_dist.ps1`（dist 分支 run 13）。
-
-### run#11 产物（历史，FinaSU v1.5.0）
-
-| 文件 | 大小 | sha256 |
-|---|---|---|
-| `boot.img`（v1，原厂 vbmeta 字节） | 100,663,296 | `963224e79d29fe8348f7a4ef2f823bc8b69167c54edd7b33ef7aba052cdb44e6` |
-| `boot-v2digest.img`（v2，重算 descriptor） | 100,663,296 | `6c605f746fae7bf8392bc884001aba7453973f79d739321a3e6fcbf3dc5677c0` |
-| `Image`（GKI，6.1.25-android14-11-maybe-dirty） | 34,892,288 | `ca540bd7e22070b27804c60888b81a0276072ab87d707e8014308910199f890c` |
-| `FinaSU_v1.5.0_33174-release.apk` | 28,657,764 | `6860cc33fdf0889290c9a27ba3dc468c3d287824695b12eea7bcc42f546b6638` |
-
-门禁实测：版本串 PASS / `missing ∩ NEED = 0`（built 14,688 导出）/ kCFI **21 MATCH + 3 N/A**。
-AVB 审计（`audit_boot.py`）：v1 为「原厂 vbmeta 逐字节 + stale digest」；v2 的 `image_size=0x2148000`、
-`salt=Image sha256`、`digest=sha256(salt||image)` 均自洽，两者结构 PASS。
+- 100,663,296 B（= 原厂 boot 分区大小，便于 `fastboot flash` 顺带清掉旧 AVBf 残留）；
+- header v4 / header_size 1584 / ramdisk 0 / os_version `0x1C00017A` / cmdline 空 / signature_size 0；
+- 与原厂头页的**唯一差异是 `kernel_size`（偏移 8~11）**；
+- `[0x1000, 0x1000+kernel_size)` 为 Image，其后全零；**无 `AVB0`、`AVBf` 处无 footer**；
+- `--bare` 可精确复现参考镜像的尺寸（34,369,536 B 那一类，不补齐分区）。
 
 ### 下一步
 
-1. 用 `docs/FLASH_SOP.md` 的步骤**只刷非活动槽**（先 v1；不行再试 v2）。
-2. 首刷后按 SOP 回填 dmesg（kCFI `expected type`、Unknown symbol）。
-3. 真机通过后，`tools/fetch_dist.ps1` 可随时取回最新产物。
+1. 触发 CI（`workflow_dispatch`，inputs 4 个），确认 `out/boot.img` 通过第 15 步自检。
+2. 用 `docs/FLASH_SOP.md` 的步骤**只刷非活动槽**。
+3. 首刷后按 SOP 回填 dmesg（kCFI `expected type`、Unknown symbol、`version magic`）。
+4. 真机通过后，`tools/fetch_dist.ps1` 可随时取回最新产物。
 
 ## 2. 仓库结构
 
@@ -54,7 +48,8 @@ patches/01-kernel-common.patch  21 Pro 参考树的兼容层，已按 M2461 改�
 kernel-add/fs/susfs.c           SUSFS 内核实现（susfs4ksu @27e0a0e）
 kernel-add/include/linux/susfs.h, susfs_def.h
 device/meizu21/                 设备事实（见 README）
-scripts/                        门禁 + 重打包（check_kcfi / check_krcrc_symvers / repack_avb_boot / audit_boot / extract_manager_cert）
+scripts/                        门禁 + 重打包（check_kcfi / check_krcrc_symvers / make_boot_zeroavb / extract_manager_cert）
+scripts/archive/                已废弃的 AVB 重签/重打包脚本（*.deprecated，勿用）
 docs/FLASH_SOP.md               刷机 / 回退 / 故障诊断
 ```
 
@@ -74,9 +69,11 @@ docs/FLASH_SOP.md               刷机 / 回退 / 故障诊断
 - 参考树 `C:\GKI\m2481-kernel` **只能读不能编**（Windows 拷贝把 symlink 压平、大小写冲突）。
 - 01 补丁把 `scripts/setlocalversion` 整段替换成常量 → release 串恒定，**不要**再还原它。
 - 01 补丁把 `/proc/config.gz` 的内容指向 `arch/arm64/configs/m2461_stock.config`（IKCONFIG 伪装），该文件必须在树里。
-- 原厂 vbmeta **是 RSA-2048 签名的**（auth=576/aux=1664，descriptor 用老布局 string32）→ 改 digest 会让签名失效，v1 只搬不改。
+- 原厂 vbmeta 是 RSA-4096 签名的（auth=576/aux=1664）→ **换 kernel 后无论如何都无法通过 AVB 校验**。
+  正确做法是**完全不写 AVB**（见 `MEMORY.md §1.4`）；保留 stale vbmeta 或用自有密钥重签都会失败。
 - 厂商 vendor 模块 vermagic 不带 `-android14-11-maybe-dirty` 是正常的（CONFIG_MODVERSIONS 有前缀兼容规则），**不用**打放宽 vermagic 的补丁。
 - `workflow_dispatch.inputs` ≤10（当前 4）；不要加 push 触发。
+- arm64 Image 的稳定魔数在 **偏移 0x38 的 `ARM\x64`**，不是开头 8 字节（开头含随尺寸变化的 `b` 分支指令）。
 
 ## 5. 快速命令
 
@@ -88,8 +85,15 @@ git -C C:\GKI\work\meizu21-gki worktree add --detach C:\GKI\work\dist21 FETCH_HE
 
 ```bash
 # 本地静态校验（不需要编译）
-python3 scripts/audit_boot.py C:\MEIZU21_12.7\boot.img          # 应 PASS
+python3 scripts/audit_boot.py C:\MEIZU21_12.7\boot.img          # 原厂镜像，应 PASS
 python3 scripts/check_kcfi.py <vmlinux> <clang_bin> device/meizu21/kcfi_expected.txt
+```
+
+```bash
+# 本地回归：用参考 kernel 重打包，应与可开机参考镜像逐字节相同
+python3 scripts/make_boot_zeroavb.py <参考 kernel> /tmp/rt.img \
+    --header-template device/meizu21/boot_header_4096.bin --bare
+# 期望 sha256 = 3eb02d295ca98a0e4b83689143094524acc55714413312c8601fd3727ef461bb
 ```
 
 ```powershell

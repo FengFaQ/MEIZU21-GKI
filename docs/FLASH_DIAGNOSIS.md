@@ -62,9 +62,15 @@ adb shell su -c 'cat /sys/fs/pstore/console-ramoops*' > pstore_after.txt
 | 卡 logo 不动（不重启） | ramdisk/init 阶段卡死 | 无 panic，需看 `init` 日志 |
 | 能开机但无 WiFi/相机 | 对应 vendor 模块未加载 | `dmesg \| grep -i 'Unknown symbol'` |
 
-**我们 run#17 是第二种**（亮 logo 数秒后重启）——这一点很关键：
-它说明 **ABL 已经放行了**（否则 logo 都不会出现），所以**问题不在 AVB，
-而在内核启动阶段**。这也是我改 AVB 签名方案后仍可能不解决的原因。
+**我们 run#17 是第二种**（亮 logo 数秒后重启）。
+
+> **2026-11-15 更正**：此前把「能出 logo」当成「ABL 已放行、问题必在内核」的证据，**这个推断不成立**。
+> Qualcomm 机型的开机 logo 常由 ABL 自己在校验阶段就画出来，因此「亮 logo 后重启」同样可能是
+> **ABL 校验失败**的表现（先画 splash → 校验 boot 失败 → 重启）。run#17 那版镜像自带 AVB
+> （原厂 stale vbmeta），本来就必然校验失败，所以那次实验**无法区分**「AVB 拒绝」与「内核 panic」。
+>
+> 现在已改为**完全不写 AVB**的镜像（见 `MEMORY.md §1.4`），这才是与可开机参考镜像同构的结构。
+> 下一轮刷机才是第一次单变量实验：若仍重启，才可排除 AVB、转向内核/模块。
 
 ---
 
@@ -114,6 +120,7 @@ fastboot reboot
 
 ## 6. 已知未验证项（写在这里免得忘）
 
-1. 魅族 ABL 在 BL 解锁后**是否仍校验 AVB** —— run#17 能出 logo，倾向「不校验或校验通过」。
+1. 魅族 ABL 在 BL 解锁后**是否仍校验 AVB** —— 仍未知。run#17 出 logo **不能**作为「已放行」的证据
+   （logo 可能由 ABL 在校验阶段就画出）。本轮改用无 AVB 镜像，正是为了把这一项变成单变量实验。
 2. 自编内核的 `Image` 比原厂大 ~1 MB（34,892,288 vs 33,892,864），是否影响启动未知。
 3. FinaSU 的 Inline hook 在本机是否正常 —— 只有真机能确认。
