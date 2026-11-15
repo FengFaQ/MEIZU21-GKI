@@ -156,7 +156,12 @@ def self_check(img: bytes, kernel: bytes, header_template: bytes,
     chk('no AVB0 magic', avb0 == -1, True)
     if avb0 != -1:
         bad.append(f'发现 AVB0 @0x{avb0:x}')
-    chk('no AVBf footer', img[-64:-60] == b'AVBf', False)
+    # 标签写成「有/无」的正向断言，避免 got=False 被误读成失败
+    chk('has AVBf @EOF-64', img[-64:-60] == b'AVBf', False)
+    avbf_any = img.find(b'AVBf')
+    chk('has AVBf anywhere', avbf_any != -1, False)
+    if avbf_any != -1:
+        bad.append(f'发现 AVBf @0x{avbf_any:x}')
 
     if bad:
         print('BOOT IMG CHECK FAILED:')
