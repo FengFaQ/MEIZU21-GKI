@@ -1,0 +1,22 @@
+=== KMI & krcrc Audit ===
+built Module.symvers        : vmlinux.symvers
+stock Module.symvers        : ../device/meizu21/stock_Module.symvers
+KMI manifest                : ../device/meizu21/module_kmi_manifest.txt
+
+Built exported symbols      : 14688
+Stock exported symbols      : 6501
+Manifest NEED / DEF         : 4892 / 0
+
+(1) Missing stock symbols   : 0   [informational - can never reach 0, do not chase it]
+(2) (stock-built) ∩ NEED    : 0   [HARD GATE - must be 0]
+    NEED symbols the stock baseline never exported: 1612   [informational - they come from other modules or are not kernel-exported]
+(3) Raw CRC matches         : 6337 / 6501   [informational]
+
+NEED CRC vs stock baseline  : 0 mismatched   [informational]
+NEED CRC vs built baseline  : 88 mismatched   [informational]
+
+[OK] (2) missing ∩ NEED is empty: every symbol the 361 vendor modules require is exported.
+
+Image provided but --rewrite not given: binary __kcrctab left untouched.
+
+[KMI GATE PASSED] missing ∩ NEED empty -> the vendor modules' symbol requirements are satisfied.

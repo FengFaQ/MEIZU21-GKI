@@ -1,0 +1,20 @@
+[OK] out/boot.img (100,663,296 B), kernel=34,957,824 B
+  magic                  b'ANDROID!'              OK
+  header_version         4                        OK
+  header_size            1584                     OK
+  kernel_size            34957824                 OK
+  ramdisk_size           0                        OK
+  os_version             0x1c00017a               OK
+  cmdline                b''                      OK
+  signature_size         0                        OK
+  hdr diff offsets       [9, 10]
+  hdr only kernel_size   True                     OK
+  kernel bytes @0x1000   True                     OK
+  payload_end            0x2158000 (34963456)
+  payload_end aligned    True                     OK
+  size > payload_end     True                     OK
+  tail_zero_filled       True                     OK
+  no AVB0 magic          True                     OK
+  has AVBf @EOF-64       False                    OK
+  has AVBf anywhere      False                    OK
+BOOT IMG CHECK PASSED（与可开机参考镜像同构：原厂头 + kernel + 零填充，无 AVB）

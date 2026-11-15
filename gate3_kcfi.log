@@ -1,0 +1,30 @@
+=== 1. Direct function preamble kCFI audit ===
+  shrink_slab                                              expected=0xc3b4beac actual=0xc3b4beac MATCH
+  setup_per_zone_wmarks                                    expected=0xa540670c actual=0xa540670c MATCH
+  find_lock_task_mm                                        expected=0xea4a421a actual=0xea4a421a MATCH
+  sched_show_task                                          expected=0x1703dde1 actual=0x1703dde1 MATCH
+  android_debug_symbol                                     expected=0x0ec970ab actual=0x0ec970ab MATCH
+  kallsyms_lookup_name                                     expected=0xaa7e236f actual=0xaa7e236f MATCH
+  sysctl_sched_uclamp_get                                  expected=0x8d4c5b69 actual=0x8d4c5b69 MATCH
+  sysctl_sched_uclamp_set                                  expected=0x06da45e1 actual=0x06da45e1 MATCH
+  end_buffer_write_sync                                    expected=0xd2948eb7 actual=0xd2948eb7 MATCH
+  do_shrink_slab                                           expected=N/A        actual=0xd65f03c0 N/A
+  clk_set_duty_cycle                                       expected=N/A        actual=0x07c4f73f N/A
+  __brelse                                                 expected=N/A        actual=0xa3e5bffb N/A
+
+=== 2. Vendor hook traceiter call-site kCFI audit ===
+  __traceiter_android_vh_extfrag_for_order                 expected=0x55ddc73d actual=0x55ddc73d MATCH  (movz/movk sequence)
+  __traceiter_android_vh_tune_watermark_ratio              expected=0xd25b6965 actual=0xd25b6965 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_mm_vip_alloc_harder               expected=0xfab75373 actual=0xfab75373 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_mm_vip_kvmalloc                   expected=0xd25b6965 actual=0xd25b6965 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_mm_vip_alloc_harder_stat          expected=0x82360994 actual=0x82360994 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_ra_tuning_max_page                expected=0x4f5f504f actual=0x4f5f504f MATCH  (movz/movk sequence)
+  __traceiter_android_vh_memcg_filepages_protect           expected=0xcacb6617 actual=0xcacb6617 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_memcg_protect_lru_gen_add_folio   expected=0xb2bf7b95 actual=0xb2bf7b95 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_smartzram_tune_swappiness         expected=0xc2e31966 actual=0xc2e31966 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_tune_scan_type                    expected=0xa57a1738 actual=0xa57a1738 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_binder_alloc                      expected=0x65f310d0 actual=0x65f310d0 MATCH  (movz/movk sequence)
+  __traceiter_android_vh_binder_ioctl                      expected=0xda47f60c actual=0xda47f60c MATCH  (movz/movk sequence)
+
+summary: 21 MATCH, 0 MISMATCH, 3 N/A, 0 MISSING (of 24 entries)
+[kCFI GATE PASSED] every entry is MATCH or N/A.

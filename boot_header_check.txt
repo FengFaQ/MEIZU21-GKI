@@ -1,0 +1,2 @@
+[header] template sha256=b2d7e70de902f136
+[header] OK（原厂头模板，机型已确认）
